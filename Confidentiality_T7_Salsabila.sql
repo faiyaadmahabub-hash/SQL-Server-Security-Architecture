@@ -1,32 +1,14 @@
+-- SALSABILA (TP078641) CONFIDENTIALITY T7 // CONFIRM LOGIN LOGOUT AUDIT
 /* ================================================================
-   PERSON C — TASK C7
-   Confirm login/logout audit captures every field Table 3 requires,
+   Task C7: Confirm login/logout audit captures every field Table 3 requires,
    and remains restricted to the DBA role only.
 
    Report reference : Section 3.5, Table 3 (Audit Matrix, row 1)
    Weakness addressed: Weakness 12
-
-   NOTE: this task is intentionally small — C6 already built and
-   tested the underlying audit mechanism. C7 adds one focused,
-   purpose-built viewing procedure that explicitly surfaces every
-   field Table 3 promises (including "client host", which C6's
-   general-purpose procedure never displayed), plus a dedicated
-   verification pass.
-
-   LESSONS FROM PREVIOUS TASKS APPLIED HERE:
-   - Long-form IF EXISTS throughout.
-   - No TRUSTWORTHY ON.
-   - GRANT EXECUTE TO DBA only, no blanket DENY TO public.
-   - No WITH EXECUTE AS OWNER needed here — same reasoning as C6's
-     original sp_DBA_ViewAuditFile, which already correctly reads
-     the audit file for any DBA-role login granted CONTROL SERVER
-     (see C6's [C6.7b] note) — this procedure follows the identical
-     access pattern, just with a narrower SELECT/WHERE.
    ================================================================ */
 
 USE SmartBankDB;
 GO
-
 
 /* ================================================================
    [C7.1] FOCUSED LOGIN/LOGOUT AUDIT VIEWING PROCEDURE
@@ -62,7 +44,6 @@ BEGIN
 END;
 GO
 
-
 /* ================================================================
    [C7.2] ACCESS RESTRICTION
    ================================================================ */
@@ -73,16 +54,12 @@ PRINT 'C7 — focused login/logout audit verification procedure ready.';
 
 -- TEST CASE >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>.
 /* ================================================================
-   PERSON C — TASK C7 TEST CASES
-   Run this AFTER C7_Login_Audit_Verification.sql has executed.
-
    Reuses test_dba_login from C6 (must already exist and be a
    member of DBA with CONTROL SERVER granted — see C6 setup).
    ================================================================ */
 
 USE SmartBankDB;
 GO
-
 
 /* ================================================================
    ONE-TIME SETUP — confirm test_dba_login still exists (from C6);
@@ -120,7 +97,6 @@ IF NOT EXISTS (SELECT 1 FROM sys.database_role_members drm
     ALTER ROLE Bank_Officer ADD MEMBER test_officer_user;
 GO
 
-
 /* ================================================================
    T-C7.1 — POSITIVE: LoginName field is populated
    ================================================================ */
@@ -132,7 +108,6 @@ REVERT;
 -- Expected: LoginName column is populated (not NULL/blank) for
 -- every row
 GO
-
 
 /* ================================================================
    T-C7.2 — POSITIVE: ClientHost field is populated
@@ -149,7 +124,6 @@ EXEC dbo.sp_DBA_ViewLoginAudit;
 REVERT;
 -- Expected: ClientHost column shows a value for at least some rows
 GO
-
 
 /* ================================================================
    T-C7.3 — POSITIVE: EventType and Succeeded correctly distinguish
@@ -168,7 +142,6 @@ REVERT;
 -- wrong password, then re-run this test.)
 GO
 
-
 /* ================================================================
    T-C7.4 — POSITIVE: Timestamp field is populated and reasonable
    ================================================================ */
@@ -184,7 +157,6 @@ REVERT;
 -- (T-C7.3), event_time (this test)
 GO
 
-
 /* ================================================================
    T-C7.5 — POSITIVE: DBA can view (re-confirmation for this
    specific procedure)
@@ -196,7 +168,6 @@ EXEC dbo.sp_DBA_ViewLoginAudit;
 REVERT;
 -- Expected: succeeds, returns rows, no error
 GO
-
 
 /* ================================================================
    T-C7.6 — NEGATIVE: non-DBA is blocked from this specific procedure

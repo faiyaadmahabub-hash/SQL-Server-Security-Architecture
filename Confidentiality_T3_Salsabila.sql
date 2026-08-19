@@ -1,33 +1,17 @@
--- SALSABILA (TP078641) - CONFIDENTIALITY
-
--- IMPLEMENTATION >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+-- SALSABILA (TP078641) CONFIDENTIALITY TC3 // HASHING AND SALTING
 /* ================================================================
-   PERSON C — TASK C3
-   Password hashing and salting (SHA2_512 + per-user salt), so
+   Task C3: Password hashing and salting (SHA2_512 + per-user salt), so
    that no one — including the DBA — can ever recover a real
    password from the database.
 
    Report reference : Section 3.3 (Hashing), 4.7
    Weakness addressed: Weakness 18 (no password hashing strategy)
-
-   LESSONS FROM C6/C2 APPLIED HERE:
-   - Confirm role names (DBA, Bank_Manager, Bank_Officer, Customer)
-     already exist locally before granting anything — they do NOT
-     sync automatically between teammates' separate databases.
-   - Long-form IF EXISTS (SELECT ...) used throughout, not the
-     shorthand DROP ... IF EXISTS (unsupported on this instance).
-   - No TRUSTWORTHY ON, no blanket DENY TO public.
-   - No CONTROL SERVER / certificate complications here — HASHBYTES
-     and CRYPT_GEN_RANDOM are plain built-in functions, so
-     EXECUTE AS USER (not LOGIN) is sufficient for all testing.
-   - Any future fix to a procedure/function here must be RE-RUN
-     against the live database — editing this file alone changes
-     nothing already deployed.
    ================================================================ */
+
+-- IMPLEMENTATION >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
 USE SmartBankDB;
 GO
-
 
 /* ================================================================
    [C3.1] HASHING FUNCTION
@@ -46,7 +30,6 @@ BEGIN
     RETURN HASHBYTES('SHA2_512', CONVERT(VARBINARY(MAX), @PlainPassword) + @Salt);
 END;
 GO
-
 
 /* ================================================================
    [C3.2] SET/RESET PASSWORD PROCEDURE
@@ -89,7 +72,6 @@ BEGIN
 END;
 GO
 
-
 /* ================================================================
    [C3.3] VERIFY PASSWORD FUNCTION
    Recomputes the hash of a supplied password using the user's
@@ -131,7 +113,6 @@ BEGIN
 END;
 GO
 
-
 /* ================================================================
    [C3.4] ACCESS RESTRICTION
    No GRANT EXECUTE to any business role (DBA, Bank_Manager,
@@ -146,7 +127,6 @@ GO
    ================================================================ */
 PRINT 'Reminder: no EXECUTE grants issued on hashing objects — reachable only via Person B''s wrapper procedures.';
 GO
-
 
 /* ================================================================
    [C3.5] MIGRATE SEED DATA
@@ -183,7 +163,6 @@ GO
 PRINT 'C3.5 — all seeded demo accounts now use password: Demo@Pass2026';
 GO
 
-
 /* ================================================================
    [C3.6] ONE-WAY DESIGN — NO CODE, DOCUMENTATION ONLY
    Unlike C2's CLE (ENCRYPTBYKEY / DECRYPTBYKEY pair), T-SQL's
@@ -201,9 +180,6 @@ PRINT 'C3 — Password hashing and salting setup complete.';
 
 -- TEST CASE >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 /* ================================================================
-   PERSON C — TASK C3 TEST CASES
-   Run this AFTER C3_Password_Hashing.sql has executed successfully.
-
    Reuses test_dba_user, test_manager_user, test_officer_user,
    test_customer_user from the C2 test suite — no need to recreate
    them if C2's test file was already run and its cleanup section
@@ -213,7 +189,6 @@ PRINT 'C3 — Password hashing and salting setup complete.';
 
 USE SmartBankDB;
 GO
-
 
 /* ================================================================
    ONE-TIME SETUP CHECK — confirm test users exist; recreate if

@@ -1,110 +1,18 @@
--- SALSABILA (TP078641)
--- CLEAN UP >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+-- SALSABILA (TP078641) CONFIDENTIALITY TC4 // STATIC DATA MASKING
 /* ================================================================
-   C4 — CLEANUP / RESET SCRIPT
-   Run this as your normal sysadmin (Windows Auth) login, in a
-   FRESH query window, before rebuilding C4 from scratch.
-
-   This only removes C4-specific objects. It does NOT touch
-   test_officer_login/test_officer_user (shared/reused across
-   C1/C2/C3/C4 test suites) — only their role membership grant
-   related to C4 testing stays intact since it's harmless and
-   reused elsewhere.
-   ================================================================ */
-
-USE SmartBankDB;
-GO
-
--- Revoke grants (safe even if they were never granted)
-IF EXISTS (SELECT 1 FROM sys.database_permissions dp
-           JOIN sys.database_principals pr ON dp.grantee_principal_id = pr.principal_id
-           WHERE pr.name = 'DBA' AND OBJECT_NAME(dp.major_id) = 'sp_RefreshDevData')
-    REVOKE EXECUTE ON dbo.sp_RefreshDevData FROM DBA;
-
-IF EXISTS (SELECT 1 FROM sys.database_permissions dp
-           JOIN sys.database_principals pr ON dp.grantee_principal_id = pr.principal_id
-           WHERE pr.name = 'DBA' AND OBJECT_NAME(dp.major_id) = 'Customer')
-    REVOKE SELECT ON dbo.Customer FROM DBA;
-
-IF EXISTS (SELECT 1 FROM sys.database_permissions dp
-           JOIN sys.database_principals pr ON dp.grantee_principal_id = pr.principal_id
-           WHERE pr.name = 'DBA' AND OBJECT_NAME(dp.major_id) = 'Staff')
-    REVOKE SELECT ON dbo.Staff FROM DBA;
-GO
-
--- Drop the procedure
-IF OBJECT_ID('dbo.sp_RefreshDevData', 'P') IS NOT NULL
-    DROP PROCEDURE dbo.sp_RefreshDevData;
-GO
-
--- Drop the entire Dev database (cleanest full reset — removes
--- Customer, Staff, FakeNamePool, FakeStreetPool all at once)
-USE master;
-GO
-
-IF DB_ID('SmartBankDB_Dev') IS NOT NULL
-BEGIN
-    ALTER DATABASE SmartBankDB_Dev SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-    DROP DATABASE SmartBankDB_Dev;
-END
-GO
-
--- Reset DB_CHAINING back to default (OFF) on SmartBankDB, since it
--- was enabled during troubleshooting and is no longer needed with
--- the final (non-cross-database-impersonation) design
-IF EXISTS (SELECT 1 FROM sys.databases WHERE name = 'SmartBankDB' AND is_db_chaining_on = 1)
-    ALTER DATABASE SmartBankDB SET DB_CHAINING OFF;
-GO
-
-USE SmartBankDB;
-GO
-
--- Confirm everything is gone
-SELECT 'sp_RefreshDevData exists' AS check_type, OBJECT_ID('dbo.sp_RefreshDevData', 'P') AS result
-UNION ALL
-SELECT 'SmartBankDB_Dev exists', DB_ID('SmartBankDB_Dev');
--- Expected: both results NULL
-
-PRINT 'C4 cleanup complete. Safe to rebuild from scratch.';
-
--- IMPLEMENTATION >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-/* ================================================================
-   PERSON C — TASK C4
-   Static Data Masking (SDM) — a separate, non-production copy of
+   Task C4: Static Data Masking (SDM) — a separate, non-production copy of
    Customer/Staff data with sensitive columns irreversibly replaced
    by realistic fake values, for safe development/testing use.
 
    Report reference : Section 3.3 (Static Data Masking), 4.8 (part 1)
    Weakness addressed: Weakness 13 (no masking for test/dev
    environments)
-
-   *** POSSIBLE ISSUE — READ BEFORE RUNNING [C4.3] ***
-   sp_RefreshDevData writes CROSS-DATABASE (SmartBankDB ->
-   SmartBankDB_Dev) using WITH EXECUTE AS OWNER. This should work
-   without any special server setting AS LONG AS both databases
-   are owned by the same sysadmin login (the normal default for a
-   single-developer local instance). If you get a cross-database
-   permission error, run this once and retry:
-
-       ALTER AUTHORIZATION ON DATABASE::SmartBankDB_Dev TO sa;
-
-   (This just makes sure both databases have the same owner — it
-   is NOT the same thing as TRUSTWORTHY ON and does not introduce
-   the same privilege-escalation risk; avoid enabling
-   'cross db ownership chaining' or TRUSTWORTHY as alternate fixes.)
-
-   LESSONS FROM C6/C2/C3/C1 APPLIED HERE:
-   - Confirm role names exist locally before granting anything.
-   - Long-form IF EXISTS throughout, not the unsupported shorthand.
-   - No TRUSTWORTHY ON.
-   - WITH EXECUTE AS OWNER so the caller (DBA) never needs direct
-     SELECT permission on real Customer/Staff data.
-   - Any fix must be RE-RUN against the live database.
    ================================================================ */
+
+-- IMPLEMENTATION >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
 USE SmartBankDB;
 GO
-
 
 /* ================================================================
    [C4.1] NON-PRODUCTION DATABASE
@@ -149,7 +57,6 @@ GO
 USE SmartBankDB;
 GO
 
-
 /* ================================================================
    [C4.2] FAKE REFERENCE DATA POOLS
    Small, reusable lookup tables in the Dev database holding
@@ -182,36 +89,10 @@ GO
 USE SmartBankDB;
 GO
 
-
 /* ================================================================
    [C4.3] REFRESH PROCEDURE
    Rebuilds SmartBankDB_Dev.Customer and .Staff from real production
    data, masking sensitive columns along the way.
- 
-   DESIGN NOTE — WHY THIS DOESN'T USE WITH EXECUTE AS OWNER:
-   An initial version used WITH EXECUTE AS OWNER (matching the
-   pattern from C2's sp_DecryptICNumber) specifically to avoid
-   granting the DBA role any direct access to real Customer/Staff
-   data. This failed with "Cannot find the object... or you do not
-   have permissions" when writing cross-database into
-   SmartBankDB_Dev — confirmed NOT caused by mismatched database
-   ownership (checked directly, both same owner) or DB_CHAINING
-   being disabled (enabled explicitly, still failed). This is a
-   known area of inconsistency in how SQL Server evaluates
-   impersonated execution contexts across database boundaries.
- 
-   ADAPTED DESIGN: runs under the caller's own context instead. The
-   DBA role is granted direct SELECT on Customer/Staff (see below)
-   — narrower than the original "DBA never touches real data"
-   ideal, but still safe: this data is read internally and
-   immediately transformed/discarded, NEVER returned in any result
-   set to the caller. A DBA running this procedure sees no real
-   customer names, phone numbers, or salaries at any point.
- 
-   ICNumber/ICNumberHash are set to NULL entirely (beyond the
-   report's literal minimum) since the ciphertext would be
-   meaningless anyway without the C2 symmetric key, which is
-   intentionally never copied to this database.
    ================================================================ */
 CREATE OR ALTER PROCEDURE dbo.sp_RefreshDevData
 AS
@@ -288,7 +169,6 @@ GO
 EXEC dbo.sp_RefreshDevData;
 GO
 
-
 /* ================================================================
    [C4.6] DOCUMENTATION — IRREVERSIBILITY GUARANTEE
    No code required. Every fake value is drawn from an independent
@@ -305,14 +185,12 @@ PRINT 'C4 — Static Data Masking dev environment setup complete.';
 
 -- TEST CASE >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 /* ================================================================
-   PERSON C — TASK C4 TEST CASES
    Run this AFTER C4_Static_Data_Masking.sql has executed
    successfully.
    ================================================================ */
 
 USE SmartBankDB;
 GO
-
 
 /* ================================================================
    ONE-TIME SETUP — confirm/create test users (reused pattern)

@@ -1,8 +1,6 @@
--- SALSABILA (TP078641) - CONFIDENTIALITY T2
--- IMPLEMENTATION >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+-- SALSABILA (TP078641) CONFIDENTIALITY TC2 // ENCRYPTION  
 /* ================================================================
-   PERSON C — TASK C2
-   Encrypt the whole database (TDE) + encrypt Customer.ICNumber
+   Task C2: Encrypt the whole database (TDE) + encrypt Customer.ICNumber
    specifically (CLE), and back up every key/certificate involved.
 
    Report reference : Section 3.3 (Encryption), Table 2
@@ -23,9 +21,11 @@
    (e.g. a password manager / vault) — never in a script like this.
    ================================================================ */
 
+
+-- IMPLEMENTATION >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
 USE SmartBankDB;
 GO
-
 
 /* ================================================================
    [C2.1] DATABASE MASTER KEY (SmartBankDB)
@@ -36,7 +36,6 @@ IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMaste
     CREATE MASTER KEY ENCRYPTION BY PASSWORD = 'SmartBank_DMK_P@ss2026!';
 GO
 
-
 /* ================================================================
    [C2.2] CLE CERTIFICATE
    Protected automatically by the DMK created above (no password
@@ -46,7 +45,6 @@ IF NOT EXISTS (SELECT 1 FROM sys.certificates WHERE name = 'CLE_ICNumber_Cert')
     CREATE CERTIFICATE CLE_ICNumber_Cert
         WITH SUBJECT = 'Column-level encryption certificate for Customer.ICNumber';
 GO
-
 
 /* ================================================================
    [C2.3] CLE SYMMETRIC KEY
@@ -59,7 +57,6 @@ IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = 'CLE_ICNumber_SymKe
         WITH ALGORITHM = AES_256
         ENCRYPTION BY CERTIFICATE CLE_ICNumber_Cert;
 GO
-
 
 /* ================================================================
    [C2.4] MIGRATE EXISTING ICNumber DATA
@@ -85,7 +82,6 @@ GO
 PRINT 'C2.4 — ICNumber data migrated from placeholder to real CLE encryption.';
 GO
 
- 
 /* ================================================================
    [C2.5] DECRYPT WRAPPER PROCEDURE
    Gives authorized staff a controlled way to view a customer's
@@ -135,36 +131,6 @@ GO
 GRANT EXECUTE ON dbo.sp_DecryptICNumber TO Bank_Officer;
 GO
 
--- }} debug to add bank manager n officer
-USE SmartBankDB;
-GO
-
-IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = 'Bank_Manager' AND type = 'R')
-    CREATE ROLE Bank_Manager;
-GO
-
-IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = 'Bank_Officer' AND type = 'R')
-    CREATE ROLE Bank_Officer;
-GO
-
-IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = 'Customer' AND type = 'R')
-    CREATE ROLE Customer;
-GO
-
--- Confirm all 4 roles now exist
-SELECT name, type_desc 
-FROM sys.database_principals 
-WHERE type = 'R' AND name IN ('DBA', 'Bank_Manager', 'Bank_Officer', 'Customer');
--- }}
-
-
--- NOTE for Person D: when building sp_ManageCustomer (INSERT/UPDATE
--- for customer records), new ICNumber values must be written using
--- the SAME pattern: OPEN SYMMETRIC KEY CLE_ICNumber_SymKey
--- DECRYPTION BY CERTIFICATE CLE_ICNumber_Cert; then
--- EncryptByKey(Key_GUID('CLE_ICNumber_SymKey'), CONVERT(VARBINARY(MAX), @PlainICNumber))
--- when inserting/updating, followed by CLOSE SYMMETRIC KEY.
-
 
 /* ================================================================
    [C2.6] MASTER-LEVEL DATABASE MASTER KEY
@@ -178,7 +144,6 @@ IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMaste
     CREATE MASTER KEY ENCRYPTION BY PASSWORD = 'SmartBank_MasterDMK_P@ss2026!';
 GO
 
-
 /* ================================================================
    [C2.7] TDE CERTIFICATE (server-level, stored in master)
    ================================================================ */
@@ -186,7 +151,6 @@ IF NOT EXISTS (SELECT 1 FROM sys.certificates WHERE name = 'TDE_SmartBankDB_Cert
     CREATE CERTIFICATE TDE_SmartBankDB_Cert
         WITH SUBJECT = 'TDE certificate for SmartBankDB';
 GO
-
 
 /* ================================================================
    [C2.8] DATABASE ENCRYPTION KEY (SmartBankDB)
@@ -203,7 +167,6 @@ BEGIN
         ENCRYPTION BY SERVER CERTIFICATE TDE_SmartBankDB_Cert;
 END
 GO
-
 
 /* ================================================================
    [C2.9] ENABLE TDE
@@ -225,7 +188,6 @@ JOIN sys.databases db ON dek.database_id = db.database_id
 WHERE db.name = 'SmartBankDB';
 GO
 
-
 /* ================================================================
    [C2.10] BACKUP: SmartBankDB's Database Master Key
    ================================================================ */
@@ -235,7 +197,6 @@ GO
 BACKUP MASTER KEY TO FILE = 'C:\SQLKeys\SmartBankDB_DMK.key'
     ENCRYPTION BY PASSWORD = 'SmartBank_KeyBackup_P@ss2026!';
 GO
-
 
 /* ================================================================
    [C2.11] BACKUP: CLE Certificate + private key
@@ -249,7 +210,6 @@ BACKUP CERTIFICATE CLE_ICNumber_Cert
         ENCRYPTION BY PASSWORD = 'SmartBank_KeyBackup_P@ss2026!'
     );
 GO
-
 
 /* ================================================================
    [C2.12] BACKUP: TDE Certificate + private key (from master)
@@ -270,21 +230,10 @@ GO
 
 PRINT 'C2 — TDE and CLE setup complete. All keys and certificates backed up.';
 
--- TEST CASE >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-/* ================================================================
-   PERSON C — TASK C2 TEST CASES
-   Run this AFTER C2_TDE_CLE_Encryption.sql has executed
-   successfully.
-
-   Uses EXECUTE AS USER (not LOGIN) throughout — unlike C6's
-   fn_get_audit_file, certificate/symmetric key access via
-   ownership chaining is a pure database-level permission, so it
-   does NOT need CONTROL SERVER or LOGIN-level impersonation.
-   ================================================================ */
+-- TEST CASE >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
 USE SmartBankDB;
 GO
-
 
 /* ================================================================
    ONE-TIME SETUP — dedicated test users for Bank_Manager,
@@ -336,7 +285,7 @@ IF NOT EXISTS (SELECT 1 FROM sys.database_role_members drm
 GO
 
 
-/* ================================================================ PASSED
+/* ================================================================ 
    T-C2.1 — POSITIVE: TDE is fully enabled
    ================================================================ */
 PRINT '--- T-C2.1: checking TDE encryption state ---';
@@ -363,7 +312,6 @@ FROM dbo.Customer;
 -- NOT a readable IC number string
 GO
 
-
  
 /* ================================================================
    T-C2.3 — POSITIVE: Bank_Manager can decrypt via the wrapper
@@ -376,7 +324,6 @@ EXEC dbo.sp_DecryptICNumber @CustomerID = 1;
 REVERT;
 GO
 
-
 /* ================================================================
    T-C2.4 — POSITIVE: Bank_Officer can decrypt via the wrapper
    ================================================================ */
@@ -387,7 +334,6 @@ EXEC dbo.sp_DecryptICNumber @CustomerID = 1;
 -- Expected: succeeds, same readable IC number as T-C2.3
 REVERT;
 GO
-
 
 /* ================================================================
    T-C2.5 — NEGATIVE: DBA is blocked from decrypting
@@ -401,7 +347,6 @@ EXEC dbo.sp_DecryptICNumber @CustomerID = 1;
 REVERT;
 GO
 
-
 /* ================================================================
    T-C2.6 — NEGATIVE: Customer is blocked from decrypting
    (Section 3.1: customers have no direct access to their own
@@ -414,7 +359,6 @@ EXEC dbo.sp_DecryptICNumber @CustomerID = 1;
 -- Expected: Msg 229 EXECUTE permission denied
 REVERT;
 GO
-
 
 /* ================================================================
    T-C2.7 — NEGATIVE: no one can open the symmetric key directly
@@ -458,7 +402,6 @@ GO
 PRINT '--- T-C2.9: MANUAL STEP — verify backup files exist ---';
 PRINT 'Check C:\SQLKeys\ contains: SmartBankDB_DMK.key, CLE_ICNumber_Cert.cer, CLE_ICNumber_Cert.pvk, TDE_SmartBankDB_Cert.cer, TDE_SmartBankDB_Cert.pvk';
 GO
-
 
 /* ================================================================
    CLEANUP — remove test artifacts (keeps test_dba_user from C6)

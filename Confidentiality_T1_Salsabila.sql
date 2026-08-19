@@ -1,49 +1,19 @@
--- SALSABILA (TP078641) CONFIDENTIALITY
+-- SALSABILA (TP078641) CONFIDENTIALITY TC1 // DYNAMIC DATA MASKING
 /* ================================================================
-   PERSON C — TASK C1
-   Dynamic Data Masking (DDM) on Account.Balance — Bank Officers
+   Task C1 : Dynamic Data Masking (DDM) on Account.Balance — Bank Officers
    see only a partial value, Bank Managers and Customers see the
    true balance.
 
    Report reference : Section 3.3 (Dynamic Data Masking), 4.5
    Weakness addressed: Weakness 7 (Bank Officer over-exposure to
    full account balances)
-
-   *** IMPORTANT — KNOWN UNCERTAINTY, READ BEFORE RUNNING [C1.1] ***
-   SQL Server's partial() masking function is only OFFICIALLY
-   documented for string data types (varchar/nvarchar/etc).
-   Account.Balance is DECIMAL(15,2). It MAY be rejected with an
-   error like "Masking function 'partial' can only be used with
-   character string data types."
-
-   IF [C1.1] ERRORS: run this instead (documented, guaranteed to
-   work on any DDM-supporting SQL Server version, matches numeric
-   columns officially):
-
-       ALTER TABLE dbo.Account
-       ALTER COLUMN Balance ADD MASKED WITH (FUNCTION = 'default()');
-
-   This fully masks Balance to 0.00 for anyone without UNMASK,
-   rather than showing a partial last-2-digits value. If you have
-   to use this fallback, note it in your report as an adaptation
-   forced by a genuine SQL Server platform constraint (partial()
-   not supporting numeric types) — a legitimate, explainable
-   engineering trade-off, not a design mistake.
-
-   LESSONS FROM C6/C2/C3 APPLIED HERE:
-   - Confirm role names (DBA, Bank_Manager, Bank_Officer, Customer)
-     already exist locally before granting anything.
-   - Using database-wide GRANT UNMASK TO <role> (SQL Server 2016+
-     compatible) rather than the newer table/column-scoped UNMASK
-     syntax (SQL Server 2022+ only) to avoid a version mismatch.
-   - No TRUSTWORTHY ON, no blanket DENY TO public.
-   - Any fix must be RE-RUN against the live database, not just
-     saved to this file.
    ================================================================ */
+
+
+-- IMPLEMENTATION OF DYNAMIC DATA MASKING >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
 USE SmartBankDB;
 GO
-
 
 /* ================================================================
    [C1.1] APPLY DYNAMIC DATA MASKING TO Account.Balance
@@ -51,10 +21,6 @@ GO
    start, replaces the middle with the padding string, then shows
    the last 2 characters of the value as stored/displayed.
    ================================================================ */
--- This one does not work
-ALTER TABLE dbo.Account
-ALTER COLUMN Balance ADD MASKED WITH (FUNCTION = 'partial(0,"XXXX.",2)');
-GO
 
 -- try this:  This fully masks Balance to 0.00 for anyone without UNMASK, rather than showing a partial last-2-digits value.
 ALTER TABLE dbo.Account
@@ -72,7 +38,6 @@ JOIN sys.tables t ON c.object_id = t.object_id
 WHERE t.name = 'Account';
 GO
 
-
 /* ================================================================
    [C1.2] GRANT UNMASK TO Bank_Manager
    Database-wide UNMASK — currently Balance is the only masked
@@ -85,7 +50,6 @@ GO
 GRANT UNMASK TO Bank_Manager;
 GO
 
-
 /* ================================================================
    [C1.3] GRANT UNMASK TO Customer
    Customers must see their true balance on their own accounts
@@ -93,7 +57,6 @@ GO
    ================================================================ */
 GRANT UNMASK TO Customer;
 GO
-
 
 /* ================================================================
    [C1.4] NO GRANT TO Bank_Officer — INTENTIONAL, NO CODE HERE
@@ -105,7 +68,6 @@ GO
    ================================================================ */
 PRINT 'Reminder: Bank_Officer intentionally has no UNMASK grant — will always see masked Balance values.';
 GO
-
 
 /* ================================================================
    [C1.5] DOCUMENTATION — MASKING IS DISPLAY-ONLY
@@ -282,7 +244,6 @@ FROM dbo.Account;
 -- (or 0.00 for every row, if the [C1.1] fallback was used instead)
 REVERT;
 GO
-
 
 /* ================================================================
    CLEANUP — remove the TEMPORARY direct table grants used for

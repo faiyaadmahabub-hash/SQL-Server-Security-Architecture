@@ -1,6 +1,6 @@
+-- SALSABILA (TP078641) CONFIDENTIALITY // ANONYMISATION
 /* ================================================================
-   PERSON C — TASK C5
-   Anonymisation — Account and TransactionRecord data extracted for
+   Task C5: Anonymisation — Account and TransactionRecord data extracted for
    analytical reporting, with all customer identity stripped and
    replaced by a randomly generated surrogate key.
 
@@ -8,24 +8,11 @@
    Weakness addressed: Weakness 10 (no anonymisation for
    non-production/analytical use)
 
-   LESSONS FROM C6/C2/C3/C1/C4 APPLIED HERE:
-   - NO WITH EXECUTE AS OWNER for this cross-database procedure —
-     C4 proved this fails unreliably across database boundaries
-     even with matching ownership and DB_CHAINING enabled. Uses
-     direct GRANT SELECT to DBA instead, from the start.
-   - Surrogate generation deliberately avoids C4's CROSS APPLY
-     "hoisting" bug: NEWID() is generated once PER ALREADY-
-     DEDUPLICATED CustomerID (via a subquery), never per source
-     row and never via an uncorrelated CROSS APPLY subquery.
-   - Confirm role names exist locally before granting anything.
-   - Long-form IF EXISTS throughout.
-   - No TRUSTWORTHY ON.
-   - Any fix must be RE-RUN against the live database.
    ================================================================ */
 
+-- IMPLEMENTATION >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>.
 USE SmartBankDB;
 GO
-
 
 /* ================================================================
    [C5.1] ANALYTICS DATABASE + TABLES
@@ -65,7 +52,6 @@ GO
 
 USE SmartBankDB;
 GO
-
 
 /* ================================================================
    [C5.2] REFRESH PROCEDURE
@@ -123,7 +109,6 @@ BEGIN
 END;
 GO
 
-
 /* ================================================================
    [C5.3] ACCESS RESTRICTION
    Only the DBA role may trigger an analytics extraction — same
@@ -158,7 +143,9 @@ GO
    ================================================================ */
 
 PRINT 'C5 — Anonymisation for analytical reporting complete.';
--- test case >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+
+-- TEST CASE >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 /* ================================================================
    PERSON C — TASK C5 TEST CASES
    Run this AFTER C5_Anonymisation.sql has executed successfully.
