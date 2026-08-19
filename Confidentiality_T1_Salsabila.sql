@@ -22,7 +22,7 @@ GO
    the last 2 characters of the value as stored/displayed.
    ================================================================ */
 
--- try this:  This fully masks Balance to 0.00 for anyone without UNMASK, rather than showing a partial last-2-digits value.
+-- This fully masks Balance to 0.00 for anyone without UNMASK, rather than showing a partial last-2-digits value.
 ALTER TABLE dbo.Account
 ALTER COLUMN Balance ADD MASKED WITH (FUNCTION = 'default()');
 GO

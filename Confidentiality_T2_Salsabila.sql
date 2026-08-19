@@ -35,7 +35,6 @@ GO
 IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMasterKey##')
     CREATE MASTER KEY ENCRYPTION BY PASSWORD = 'SmartBank_DMK_P@ss2026!';
 GO
-
 /* ================================================================
    [C2.2] CLE CERTIFICATE
    Protected automatically by the DMK created above (no password
@@ -45,7 +44,6 @@ IF NOT EXISTS (SELECT 1 FROM sys.certificates WHERE name = 'CLE_ICNumber_Cert')
     CREATE CERTIFICATE CLE_ICNumber_Cert
         WITH SUBJECT = 'Column-level encryption certificate for Customer.ICNumber';
 GO
-
 /* ================================================================
    [C2.3] CLE SYMMETRIC KEY
    The actual key that performs encryption/decryption of ICNumber
