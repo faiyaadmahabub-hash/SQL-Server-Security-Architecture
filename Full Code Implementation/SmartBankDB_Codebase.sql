@@ -1,75 +1,8 @@
--- ====================================================================
--- SmartBankDB -- FULL CODEBASE (schema, roles, views, procedures,
--- triggers, backup automation)
--- ====================================================================
--- This file is the COMPLETE, STANDALONE system -- schema, seed data,
--- 5 roles (DBA, Bank_Manager, Bank_Officer, Customer, RecoveryAdmin),
--- 14 views, 19 stored procedures, 8 triggers, backup encryption, and
--- 3 SQL Server Agent jobs. Contains ZERO test cases, ZERO test-only
--- principals -- this is meant to run cleanly, top to bottom, in one
--- shot, exactly as a marker would expect to see it deployed.
---
--- Split out from the original combined build script into 3 files:
---   THIS FILE               -- SmartBankDB_Codebase.sql
---   SmartBankDB_FeatureTests.sql   -- exhaustive test suite (depends
---                                      on this file having been run
---                                      first)
---   SmartBankDB_DemoWalkthrough.sql -- curated demo script, sequenced
---                                      to the lecturer's 9-point
---                                      checklist (also depends on
---                                      this file)
---
--- BEFORE RUNNING: create these folders on the SQL Server host, and
--- grant the SQL Server service account Modify permission on each:
---   C:\SQLAudit\
---   C:\SQLKeys\
---   C:\SQLBackups\Full\
---   C:\SQLBackups\Differential\
---   C:\SQLBackups\Log\
--- Requires SQL Server Agent to be running for the backup jobs.
--- ====================================================================
+ï»¿-- SmartBankDB Codebase: schema, roles, views, procedures, triggers, backup automation. Covers Confidentiality + Integrity + Availability. Seed data and tests live in FeatureTests.sql; demo script in DemoWalkthrough.sql. BEFORE RUNNING: create C:\SQLAudit\, C:\SQLKeys\, C:\SQLBackups\Full\, C:\SQLBackups\Differential\, C:\SQLBackups\Log\ with service-account write access; SQL Server Agent must be running.
 
 
--- ====================================================================
--- SmartBankDB -- COMBINED SECURITY SCRIPT
--- Merged from 7 source files into a single run-in-order script, plus
--- 4 parts built directly in this combined file afterward (Parts 7-10).
---
--- Contents:
---   PART 0  Database & Table Baseline        (SQL_Database_Security_Baseline.sql)
---   PART 1  Authentication (Task 1 & 2)       (4_1_authentication)
---   PART 2  Authorization / RBAC (Task 3)     (4_2_authorization_rbac)
---   PART 3  Views (Task 4)                    (4_3_views)
---   PART 4  Row-Level Security (Task 5)       (4_4_row_level_security)
---   PART 5  Confidentiality C6 -- Audit       (Confidentiality_T6_Salsabila)
---   PART 6  Confidentiality C2 -- Encryption  (Confidentiality_T2_Salsabila)
---   PART 7  Integrity -- DML Audit Triggers   (Section 2, Requirement 6)
---   PART 8  Integrity -- Write Procedures     (Section 2, Requirements 2-5)
---   PART 9  Availability -- Recovery Procedures (Section 3, Requirement 1)
---   PART 10 Availability -- Backup Automation   (Section 3, Requirements 2 & 3)
---
--- ================================================================
--- Component: RecoveryAdmin -- a 5th role, standing separately from
--- the 4 the assignment names (see Part 2, Task #3) -- holds the
--- _History views (Part 3) and sp_RecoverX procedures (Part 9), with
--- DBA nested as a member. Closes the tension between DBA's actual
--- grants and the rubric's literal wording ("view only their own
--- record" / "manage tables, not data").
---
-
--- Ordering notes:
---  - Baseline must run first: everything else references its tables.
---  - Task 3 (roles) must precede Task 4/5 (views granted to those
---    roles) and must precede C6 (audit proc checks IS_MEMBER('DBA')).
---  - C6 is placed before C2 because C2's own test-setup comment says
---    it "reuses test_dba_user from C6".
---  - NOTE: "SQL_Database_Baseline.sql" (the OTHER baseline file) was
---    intentionally excluded -- it's an earlier/incompatible draft
---    (missing UserLogin/AuditLog/PendingApproval/SecurityConfig and
---    the IsActive/temporal columns every later script relies on, and
---    contains a "Create Database artBankDB" typo). Ask if you actually
---    wanted it included instead.
--- ====================================================================
+-- Parts: 0 Baseline | 1 Authentication | 2 RBAC | 3 Views | 4 Row-Level Security | 5 Native Audit (C) | 6 Encryption (C) | 7 DML Audit Triggers (I) | 8 Write Procedures (I) | 9 Recovery (A) | 10 Backup Automation (A).
+-- RecoveryAdmin (Part 2): 5th role holding recovery/history access, DBA nested as member -- keeps DBA's own grants matching the rubric literally. Integrity + Availability.
 
 
 -- ################################################################
@@ -82,9 +15,7 @@ GO
 USE SmartBankDB;
 GO
 
--- =============================================
--- Staff Table (temporal)
--- =============================================
+-- Staff table (temporal).
 CREATE TABLE Staff (
     StaffID   INT  NOT NULL IDENTITY(1,1) PRIMARY KEY,
     StaffName NVARCHAR(100)  NOT NULL,
@@ -106,9 +37,7 @@ CREATE TABLE Staff (
 WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = dbo.Staff_History));
 GO
 
--- =============================================
--- Customer Table (temporal)
--- =============================================
+-- Customer table (temporal).
 CREATE TABLE Customer (
     CustomerID   INT NOT NULL IDENTITY(1,1) PRIMARY KEY,
     CustomerName NVARCHAR(100) NOT NULL,
@@ -126,9 +55,7 @@ CREATE TABLE Customer (
 WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = dbo.Customer_History));
 GO
 
--- =============================================
--- Account Table (temporal)
--- =============================================
+-- Account table (temporal).
 CREATE TABLE Account (
     AccountID  INT  NOT NULL IDENTITY(1,1) PRIMARY KEY,
     CustomerID  INT NOT NULL,
@@ -152,9 +79,7 @@ CREATE TABLE Account (
 WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = dbo.Account_History));
 GO
 
--- =============================================
--- TransactionRecord Table (temporal)
--- =============================================
+-- TransactionRecord table (temporal).
 CREATE TABLE TransactionRecord (
     TransID         INT IDENTITY(1,1)  NOT NULL PRIMARY KEY,
     AccountID       INT                NOT NULL,
@@ -191,9 +116,22 @@ CREATE TABLE TransactionRecord (
 WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = dbo.TransactionRecord_History));
 GO
 
--- =============================================
--- UserLogin Table
--- =============================================
+-- Dynamic Data Masking (DDM): protects sensitive attributes while preserving controlled access through views/RLS.
+-- Customers must be able to access their own information; therefore ownership is handled by RLS, not by hiding their own profile.
+ALTER TABLE dbo.Staff
+ALTER COLUMN Salary ADD MASKED WITH (FUNCTION = 'default()');
+GO
+
+ALTER TABLE dbo.Customer
+ALTER COLUMN Phone 
+ADD MASKED WITH (FUNCTION = 'partial(0,"XXXX",4)');
+GO
+
+ALTER TABLE dbo.Customer
+ALTER COLUMN Address ADD MASKED WITH (FUNCTION = 'default()');
+GO
+
+-- UserLogin table.
 CREATE TABLE UserLogin (
     LoginID      INT            NOT NULL IDENTITY(1,1) PRIMARY KEY,
     Username     NVARCHAR(50)   NOT NULL UNIQUE,
@@ -234,15 +172,7 @@ CREATE UNIQUE INDEX UQ_CustomerLogin
     WHERE CustomerID IS NOT NULL;
 GO
 
--- =============================================
--- AuditLog Table
--- Lives in its own schema (AuditSchema), deliberately NOT dbo.
--- This is what actually makes the DBA-can't-tamper-with-the-audit-
--- trail protection work: DBA's table-management rights (granted
--- later in Task #3) are scoped to "ALTER ON SCHEMA::dbo" only, so
--- a table that was never put in dbo in the first place is simply
--- outside DBA's reach -- no DENY required, nothing to override.
--- =============================================
+-- AuditLog table: lives in AuditSchema (not dbo) so DBA's table-management rights never reach it. Integrity.
 CREATE SCHEMA AuditSchema AUTHORIZATION dbo;
 GO
 
@@ -260,9 +190,7 @@ CREATE TABLE AuditSchema.AuditLog (
 );
 GO
 
--- =============================================
--- PendingApproval Table
--- =============================================
+-- PendingApproval table.
 CREATE TABLE PendingApproval (
     RequestID       INT IDENTITY(1,1)  NOT NULL PRIMARY KEY,
     AccountID       INT                NOT NULL,
@@ -313,193 +241,6 @@ CREATE TABLE PendingApproval (
 );
 GO
 
--- =============================================
---                SEED DATA SECTION
--- Demo data for Staff, Customer, Account, UserLogin,
--- TransactionRecord, PendingApproval. ICNumber/PasswordHash
--- use placeholder encryption/hashing pending C's final approach.
--- =============================================
-
--- =============================================
--- Staff: 1 DBA, 5 Manager, 10 Officer (16 total)
--- Officer #10 (Officer_Inactive) is soft-deleted to prove deactivation
--- =============================================
-INSERT INTO Staff (StaffName, Position, Branch, Phone, Salary, IsActive) VALUES
-('Aisha Rahman',      'DBA',           'HQ',           '0121234567', 9500.00, 1),
-('Farid Osman',       'Bank Manager',  'Kuala Lumpur', '0122345678', 8200.00, 1),
-('Mei Ling Tan',      'Bank Manager',  'Petaling Jaya','0123456789', 8200.00, 1),
-('Ravi Kumar',        'Bank Manager',  'Subang',       '0124567890', 8200.00, 1),
-('Nurul Aina',        'Bank Manager',  'Klang',        '0125678901', 8200.00, 1),
-('Wei Jian Lim',      'Bank Manager',  'Shah Alam',    '0126789012', 8200.00, 1),
-('Hafiz Zainal',      'Bank Officer',  'Kuala Lumpur', '0127890123', 4500.00, 1),
-('Siti Aminah',       'Bank Officer',  'Kuala Lumpur', '0128901234', 4500.00, 1),
-('Kevin Wong',        'Bank Officer',  'Petaling Jaya','0129012345', 4500.00, 1),
-('Priya Sharma',      'Bank Officer',  'Petaling Jaya','0121122334', 4500.00, 1),
-('Amir Hakim',        'Bank Officer',  'Subang',       '0122233445', 4500.00, 1),
-('Chong Wei Ling',    'Bank Officer',  'Subang',       '0123344556', 4500.00, 1),
-('Nabila Yusof',      'Bank Officer',  'Klang',        '0124455667', 4500.00, 1),
-('Daniel Lee',        'Bank Officer',  'Klang',        '0125566778', 4500.00, 1),
-('Fatimah Zahra',     'Bank Officer',  'Shah Alam',    '0126677889', 4500.00, 1),
-('Officer Inactive',  'Bank Officer',  'Shah Alam',    '0127788990', 4500.00, 0);
-GO
-
--- =============================================
--- Customer: 20 total. CustomerID 1 is inactive (soft-deleted).
--- CustomerID 2 and 3 will each receive a second account below (multi-account proof).
--- ICNumber/ICNumberHash use PLACEHOLDER encryption -- flagged for C to replace.
--- =============================================
-DECLARE @ICPlaceholders TABLE (RowNum INT IDENTITY(1,1), PlainIC NVARCHAR(20));
-INSERT INTO @ICPlaceholders (PlainIC) VALUES
-('900101101234'),('880215102345'),('920330103456'),('851122104567'),('930618105678'),
-('870704106789'),('960912107890'),('890825108901'),('941117109012'),('861005110123'),
-('991230111234'),('840301112345'),('950419113456'),('920607114567'),('880814115678'),
-('970126116789'),('901009117890'),('930523118901'),('861211119012'),('941003120123');
-
-DECLARE @CustNames TABLE (RowNum INT IDENTITY(1,1), CustomerName NVARCHAR(100), Phone NVARCHAR(20), Address NVARCHAR(255), IsActive BIT);
-INSERT INTO @CustNames (CustomerName, Phone, Address, IsActive) VALUES
-('Customer Inactive',  '0131234567', 'No 1, Jalan Damai, Kuala Lumpur',        0),
-('Aiman Haziq',        '0132345678', 'No 2, Jalan Bunga, Petaling Jaya',       1),
-('Grace Lim',          '0133456789', 'No 3, Jalan Mawar, Subang Jaya',         1),
-('Suresh Nair',        '0134567890', 'No 4, Jalan Indah, Klang',               1),
-('Nadia Iskandar',     '0135678901', 'No 5, Jalan Sentosa, Shah Alam',         1),
-('Benjamin Teh',       '0136789012', 'No 6, Jalan Harmoni, Kuala Lumpur',      1),
-('Farah Diyana',       '0137890123', 'No 7, Jalan Ceria, Petaling Jaya',       1),
-('Vincent Chua',       '0138901234', 'No 8, Jalan Aman, Subang Jaya',          1),
-('Hana Batrisyia',     '0139012345', 'No 9, Jalan Maju, Klang',                1),
-('Arjun Singh',        '0131122334', 'No 10, Jalan Bahagia, Shah Alam',        1),
-('Zara Iman',          '0132233445', 'No 11, Jalan Sejahtera, Kuala Lumpur',   1),
-('Marcus Ong',         '0133344556', 'No 12, Jalan Damansara, Petaling Jaya',  1),
-('Aleesha Putri',      '0134455667', 'No 13, Jalan Kenanga, Subang Jaya',      1),
-('Jason Yap',          '0135566778', 'No 14, Jalan Melur, Klang',              1),
-('Insyirah Aqilah',    '0136677889', 'No 15, Jalan Angsana, Shah Alam',        1),
-('Michael Fernandez',  '0137788990', 'No 16, Jalan Cempaka, Kuala Lumpur',     1),
-('Aina Sofea',         '0138899001', 'No 17, Jalan Teratai, Petaling Jaya',    1),
-('Dinesh Kumar',       '0139900112', 'No 18, Jalan Dahlia, Subang Jaya',       1),
-('Qistina Balqis',     '0131234098', 'No 19, Jalan Anggerik, Klang',           1),
-('Ethan Goh',          '0132345109', 'No 20, Jalan Kasturi, Shah Alam',        1);
-
-INSERT INTO Customer (CustomerName, ICNumber, ICNumberHash, Phone, Address, IsActive)
-SELECT
-    c.CustomerName,
-    ENCRYPTBYPASSPHRASE('TEMP_PLACEHOLDER_KEY', i.PlainIC),   -- placeholder, C to re-encrypt with real cert/key
-    HASHBYTES('SHA2_256', i.PlainIC),
-    c.Phone,
-    c.Address,
-    c.IsActive
-FROM @CustNames c
-JOIN @ICPlaceholders i ON i.RowNum = c.RowNum
-ORDER BY c.RowNum;
-GO
-
--- =============================================
--- Account: 24 total. CustomerID 2 and 3 each get 2 accounts (multi-account proof).
--- CustomerID 1 (inactive) still gets 1 account for completeness of the deactivation demo.
--- =============================================
-INSERT INTO Account (CustomerID, AccountType, Balance, IsActive) VALUES
-(1,  'Savings', 500.00,   0),
-(2,  'Savings', 3200.00,  1),
-(2,  'Current', 1500.00,  1),
-(3,  'Savings', 8700.00,  1),
-(3,  'Fixed Deposit', 15000.00, 1),
-(4,  'Savings', 2100.00,  1),
-(5,  'Current', 900.00,   1),
-(6,  'Savings', 4300.00,  1),
-(7,  'Savings', 1750.00,  1),
-(8,  'Current', 6200.00,  1),
-(9,  'Savings', 3400.00,  1),
-(10, 'Savings', 2950.00,  1),
-(11, 'Current', 5100.00,  1),
-(12, 'Savings', 800.00,   1),
-(13, 'Savings', 12500.00, 1),
-(14, 'Current', 1900.00,  1),
-(15, 'Savings', 3600.00,  1),
-(16, 'Savings', 700.00,   1),
-(17, 'Current', 4400.00,  1),
-(18, 'Savings', 2200.00,  1),
-(19, 'Savings', 9800.00,  1),
-(20, 'Current', 1300.00,  1),
-(2,  'Fixed Deposit', 20000.00, 1),
-(3,  'Current', 2600.00, 1);
-GO
-
--- =============================================
--- UserLogin: 1 per Staff (16) + 1 per Customer (20) = 36
--- PasswordHash/Salt are PLACEHOLDER -- to be replaced once C/B finalize real hashing
--- IsActive mirrors the linked Staff/Customer IsActive status
--- =============================================
-DECLARE @LoginSeed TABLE (RowNum INT IDENTITY(1,1), Username NVARCHAR(50), StaffID INT NULL, CustomerID INT NULL, UserType NVARCHAR(10), IsActive BIT);
-
-INSERT INTO @LoginSeed (Username, StaffID, UserType, IsActive)
-SELECT 'staff_' + LOWER(REPLACE(StaffName, ' ', '')), StaffID, 'Staff', IsActive
-FROM Staff;
-
-INSERT INTO @LoginSeed (Username, CustomerID, UserType, IsActive)
-SELECT 'cust_' + LOWER(REPLACE(CustomerName, ' ', '')), CustomerID, 'Customer', IsActive
-FROM Customer;
-
-INSERT INTO UserLogin (Username, PasswordHash, Salt, StaffID, CustomerID, UserType, FailedLoginAttempts, LockoutUntil, IsActive)
-SELECT
-    Username,
-    HASHBYTES('SHA2_512', CONVERT(NVARCHAR(50), NEWID())),  -- placeholder hash, replace with real hashing procedure output
-    HASHBYTES('SHA2_256', CONVERT(NVARCHAR(50), NEWID())),  -- placeholder salt
-    StaffID,
-    CustomerID,
-    UserType,
-    0,
-    NULL,
-    IsActive
-FROM @LoginSeed;
-GO
-
--- Demo-ready credentials (memorable, for live login during Step 1) --
--- DBA:     staff_aisharahman
--- Manager: staff_faridosman, staff_meilingtan
--- Officer: staff_hafizzainal, staff_sitiaminah
--- Customer: cust_aimanhaziq, cust_gracelim
--- Actual passwords to be set once real hashing (sp_ChangePassword / registration) is wired up.
-
--- =============================================
--- TransactionRecord: bulk filler (~180 rows) across the 24 accounts
--- Plus explicit transfers between seeded customers' accounts
--- =============================================
-
--- Explicit transfers (Aiman -> Grace, Grace -> Aiman) for believable audit trail
-INSERT INTO TransactionRecord (AccountID, Amount, TransactionType, ToAccountID) VALUES
-(2, 500.00, 'Transfer', 4),   -- Aiman's Savings -> Grace's Savings
-(4, 200.00, 'Transfer', 2),   -- Grace's Savings -> Aiman's Savings
-(3, 1000.00, 'Transfer', 5),  -- Aiman's Current -> Grace's Fixed Deposit
-(9, 350.00, 'Transfer', 11),  -- Farah -> Hana
-(13, 800.00, 'Transfer', 17); -- Zara -> Insyirah
-GO
-
--- Bulk filler: random deposits/withdrawals across AccountID 1-24, excluding closed/invalid combos
-DECLARE @i INT = 1;
-DECLARE @AcctID INT;
-DECLARE @Amt DECIMAL(15,2);
-DECLARE @Type NVARCHAR(20);
-
-WHILE @i <= 180
-BEGIN
-    SET @AcctID = (ABS(CHECKSUM(NEWID())) % 24) + 1;     -- AccountID 1-24
-    SET @Amt = CAST((ABS(CHECKSUM(NEWID())) % 500000) / 100.0 + 10.00 AS DECIMAL(15,2));  -- RM10 - RM5010
-    SET @Type = CASE WHEN ABS(CHECKSUM(NEWID())) % 2 = 0 THEN 'Deposit' ELSE 'Withdrawal' END;
-
-    INSERT INTO TransactionRecord (AccountID, Amount, TransactionType, ToAccountID)
-    VALUES (@AcctID, @Amt, @Type, NULL);
-
-    SET @i += 1;
-END
-GO
-
--- =============================================
--- PendingApproval: 1 pre-existing large transaction (>RM10,000) sitting Pending
--- NOTE: once sp_ProcessTransaction (Section 4.x) exists, regenerate this row by
--- calling the real procedure instead of a direct INSERT, so the audit trail is honest.
--- Requires UserLogin to exist first (FK to Username).
--- =============================================
-INSERT INTO PendingApproval (AccountID, RequestedBy, Amount, TransactionType, ToAccountID, Status)
-VALUES (15, 'staff_hafizzainal', 15000.00, 'Withdrawal', NULL, 'Pending');
-GO
 
 -- ################################################################
 -- ## PART 1 -- AUTHENTICATION: TASK 1 (Login) & TASK 2 (Change Password)  (4_1_authentication)
@@ -508,24 +249,12 @@ GO
 USE SmartBankDB;
 GO
 
--- ================================================================
--- TASK #1: LOGIN SYSTEM (sp_Login, sp_Logout)
--- ================================================================
-
--- ----------------------------------------------------------------
--- Component: Schema support for login (adds PasswordLastChanged
--- column needed for the password expiration check further down)
--- ----------------------------------------------------------------
+-- TASK 1: Login system (sp_Login, sp_Logout). Confidentiality.
 ALTER TABLE dbo.UserLogin
 ADD PasswordLastChanged DATETIME2 NOT NULL DEFAULT SYSDATETIME();
 GO
 
--- ----------------------------------------------------------------
--- Component: Account lockout settings + Password expiration
--- (a small settings table so the numbers below aren't hardcoded
--- inside the procedure -- makes them easy to point to and explain
--- during the demo, and easy to change later without editing code)
--- ----------------------------------------------------------------
+-- SecurityConfig: lockout/expiry policy values, avoids hardcoding. Confidentiality.
 CREATE TABLE dbo.SecurityConfig (
     ConfigKey   NVARCHAR(50) NOT NULL PRIMARY KEY,
     ConfigValue INT          NOT NULL
@@ -538,12 +267,7 @@ INSERT INTO dbo.SecurityConfig (ConfigKey, ConfigValue) VALUES
     ('PasswordExpiryDays', 90);    -- Component: Password expiration setting
 GO
 
--- ================================================================
--- Component: sp_Login stored procedure
--- (Fixes Weakness 1: "No authentication mechanism" -- this is the
--- procedure that finally checks who someone is before letting them
--- touch anything.)
--- ================================================================
+-- sp_Login: authenticates a user, sets SESSION_CONTEXT identity. Confidentiality.
 CREATE OR ALTER PROCEDURE dbo.sp_Login
     @Username        NVARCHAR(50),
     @PlainPassword   NVARCHAR(100),
@@ -578,16 +302,7 @@ BEGIN
     FROM dbo.UserLogin
     WHERE Username = @Username;
 
-    -- ------------------------------------------------------------
-    -- Component: build the "claimed identity" descriptor for the
-    -- audit trail. Deliberately kept OUT of ChangedBy -- ChangedBy
-    -- only ever reflects a VERIFIED identity via SESSION_CONTEXT,
-    -- which a failed login never sets. This descriptor instead
-    -- answers "what did they claim to be," which is what a reader
-    -- actually wants when scanning for failed-login patterns later
-    -- (e.g. "how many rejected logins targeted Bank Officer
-    -- accounts this week").
-    -- ------------------------------------------------------------
+-- Builds a 'claimed identity' string for REJECTED audit rows without touching ChangedBy (verified identity only). Confidentiality + Integrity.
     IF @LoginID IS NOT NULL
     BEGIN
         IF @UserType = 'Staff'
@@ -600,11 +315,7 @@ BEGIN
     ELSE
         SET @AttemptDescriptor = 'No account found for this username';
 
-    -- ------------------------------------------------------------
-    -- Component: Generic error messages
-    -- (Unknown username gets the SAME message as a wrong password,
-    -- so an attacker can't tell which one they got wrong.)
-    -- ------------------------------------------------------------
+-- Unknown username and wrong password share one message so an attacker can't tell them apart. Confidentiality.
     IF @LoginID IS NULL
     BEGIN
         SET @Message = 'Invalid username or password.';
@@ -621,11 +332,7 @@ BEGIN
         RETURN;
     END
 
-    -- ------------------------------------------------------------
-    -- Component: Account lockout after failed attempts
-    -- (Fixes part of Weakness 3 -- refuses to even check the
-    -- password if the account is currently locked out.)
-    -- ------------------------------------------------------------
+-- Blocks login entirely while the account is locked out. Confidentiality.
     IF @LockoutUntil IS NOT NULL AND @LockoutUntil > SYSDATETIME()
     BEGIN
         SET @Message = 'Account temporarily locked. Please try again later.';
@@ -634,20 +341,10 @@ BEGIN
         RETURN;
     END
 
-    -- ------------------------------------------------------------
-    -- Component: Password verification (hash comparison) + Salting
-    -- (Fixes Weakness 18 -- password is never compared as plain
-    -- text. We hash what they typed, using their unique salt, and
-    -- compare it to the stored hash. SHA2_512 matches the 64-byte
-    -- PasswordHash column already defined in the schema.)
-    -- ------------------------------------------------------------
+-- Hashes + salts the typed password (SHA2_512) and compares to the stored hash -- never compares plaintext. Confidentiality.
     IF HASHBYTES('SHA2_512', @Salt + CONVERT(VARBINARY(4000), @PlainPassword)) = @StoredHash
     BEGIN
-        -- --------------------------------------------------------
-        -- Component: Password expiration
-        -- (Fixes part of Weakness 3 -- correct password, but if
-        -- it's too old, block login and demand a change instead.)
-        -- --------------------------------------------------------
+-- Correct-but-expired password blocks login and forces a change. Confidentiality.
         IF DATEDIFF(DAY, @PasswordLastChanged, SYSDATETIME()) > @ExpiryDays
         BEGIN
             SET @PasswordExpired = 1;
@@ -661,12 +358,7 @@ BEGIN
             RETURN;
         END
 
-        -- --------------------------------------------------------
-        -- Component: Setting SESSION_CONTEXT on success
-        -- (Fixes the "who is this" problem for every later task --
-        -- Task #5's row-filtering AND D's transaction procedures
-        -- both read these values to know who's logged in.)
-        -- --------------------------------------------------------
+-- Sets SESSION_CONTEXT on success so every later RLS filter and proc check knows who's logged in. Confidentiality + Integrity.
         SET @Success = 1;
         SET @Message = 'Login successful.';
         UPDATE dbo.UserLogin
@@ -679,11 +371,7 @@ BEGIN
     END
     ELSE
     BEGIN
-        -- --------------------------------------------------------
-        -- Component: Account lockout after failed attempts
-        -- (Wrong password -- count it, and lock the account if
-        -- this attempt pushes the count to the configured limit.)
-        -- --------------------------------------------------------
+-- Wrong password increments the failed-attempt counter and locks the account once the threshold is hit. Confidentiality.
         UPDATE dbo.UserLogin
         SET FailedLoginAttempts = FailedLoginAttempts + 1,
             LockoutUntil = CASE WHEN FailedLoginAttempts + 1 >= @MaxAttempts
@@ -698,11 +386,7 @@ BEGIN
 END;
 GO
 
--- ================================================================
--- Component: sp_Logout procedure
--- (Small companion to sp_Login -- clears the SESSION_CONTEXT
--- values so the session no longer "remembers" who was logged in.)
--- ================================================================
+-- sp_Logout: clears SESSION_CONTEXT. Confidentiality.
 CREATE OR ALTER PROCEDURE dbo.sp_Logout
 WITH EXECUTE AS OWNER
 AS
@@ -715,16 +399,7 @@ END;
 GO
 
 
--- ================================================================
--- TASK #2: CHANGE PASSWORD FEATURE (sp_ChangePassword)
--- ================================================================
-
--- ----------------------------------------------------------------
--- Component: Password complexity check
--- (Fixes Weakness 3 -- rejects weak new passwords before they can
--- ever be saved. Requires 8+ characters, at least one uppercase,
--- one lowercase, one digit, and one special character.)
--- ----------------------------------------------------------------
+-- TASK 2: sp_ChangePassword. Rejects weak new passwords (8+ chars, mixed case, digit, symbol). Confidentiality.
 CREATE OR ALTER FUNCTION dbo.fn_ValidatePasswordComplexity
     (@PlainPassword NVARCHAR(100))
 RETURNS BIT
@@ -741,9 +416,7 @@ BEGIN
 END;
 GO
 
--- ================================================================
--- Component: sp_ChangePassword stored procedure
--- ================================================================
+-- sp_ChangePassword stored procedure. Confidentiality.
 CREATE OR ALTER PROCEDURE dbo.sp_ChangePassword
     @Username    NVARCHAR(50),
     @OldPassword NVARCHAR(100),
@@ -765,12 +438,7 @@ BEGIN
     SELECT @MaxAttempts    = ConfigValue FROM dbo.SecurityConfig WHERE ConfigKey = 'MaxFailedAttempts';
     SELECT @LockoutMinutes = ConfigValue FROM dbo.SecurityConfig WHERE ConfigKey = 'LockoutMinutes';
 
-    -- Account lookup moved ahead of the complexity check (below) so
-    -- the audit descriptor is available even when the FIRST thing
-    -- that fails is the new password's complexity -- this doesn't
-    -- change which check runs first for the caller (complexity is
-    -- still checked before anything account-specific), it just
-    -- means this one extra lightweight SELECT happens earlier
+-- Account lookup moved earlier so the audit descriptor is ready even when complexity fails first.
     SELECT @LoginID = LoginID, @StoredHash = PasswordHash, @Salt = Salt,
            @IsActive = IsActive, @LockoutUntil = LockoutUntil,
            @StaffID = StaffID, @UserType = UserType
@@ -791,12 +459,7 @@ BEGIN
     ELSE
         SET @AttemptDescriptor = 'No account found for this username';
 
-    -- ------------------------------------------------------------
-    -- Component: Password complexity check
-    -- (Check the NEW password before touching anything else --
-    -- no point verifying the old password if the new one is
-    -- going to be rejected anyway.)
-    -- ------------------------------------------------------------
+-- Checks new-password strength before touching the account at all. Confidentiality.
     IF dbo.fn_ValidatePasswordComplexity(@NewPassword) = 0
     BEGIN
         SET @Message = 'New password must be at least 8 characters and include an uppercase letter, a lowercase letter, a digit, and a special character.';
@@ -814,9 +477,7 @@ BEGIN
         RETURN;
     END
 
-    -- ------------------------------------------------------------
-    -- Component: Reuse the lockout mechanism for wrong old-password attempts
-    -- ------------------------------------------------------------
+-- Reuses the lockout mechanism for wrong old-password attempts. Confidentiality.
     IF @LockoutUntil IS NOT NULL AND @LockoutUntil > SYSDATETIME()
     BEGIN
         SET @Message = 'This account is temporarily locked. Please try again later.';
@@ -825,9 +486,7 @@ BEGIN
         RETURN;
     END
 
-    -- ------------------------------------------------------------
-    -- Component: Verify old password first
-    -- ------------------------------------------------------------
+-- Verifies the old password first. Confidentiality.
     IF HASHBYTES('SHA2_512', @Salt + CONVERT(VARBINARY(4000), @OldPassword)) <> @StoredHash
     BEGIN
         -- Wrong old password -- counts as a failed attempt, same as Task #1
@@ -844,10 +503,7 @@ BEGIN
         RETURN;
     END
 
-    -- ------------------------------------------------------------
-    -- Component: New random salt + New hash using SHA2_512
-    -- + Reset PasswordLastChanged + Reset lockout state on success
-    -- ------------------------------------------------------------
+-- New salt + SHA2_512 hash, plus resets PasswordLastChanged and lockout state on success. Confidentiality.
     DECLARE @NewSalt VARBINARY(32) = CRYPT_GEN_RANDOM(32);
 
     UPDATE dbo.UserLogin
@@ -871,16 +527,7 @@ GO
 USE SmartBankDB;
 GO
 
--- ================================================================
--- TASK #3: SET UP THE 4 ROLES
--- ================================================================
-
--- ================================================================
--- Component: Create 4 database roles
--- (Fixes Weakness 2 -- previously all users shared one connection
--- with no roles at all. These 4 roles match the 4 user types
--- defined in the assignment brief and Section 3.1 of our report.)
--- ================================================================
+-- TASK 3: creates the 4 roles the assignment names -- DBA, Bank_Manager, Bank_Officer, Customer. Integrity.
 CREATE ROLE DBA;
 GO
 CREATE ROLE Bank_Manager;
@@ -890,148 +537,70 @@ GO
 CREATE ROLE Customer;
 GO
 
--- ================================================================
--- Component: RecoveryAdmin -- a 5th role, standing separately from
--- the 4 the assignment names, closing the two remaining tensions
--- between DBA's actual grants and the rubric's literal wording for
--- DBA ("view only their own record" / "manage tables, not data").
---
--- This is Separation of Duties (straight from the lecture slides'
--- own example: Approve Payment -> Manager, Process Payment ->
--- Finance Officer, Audit Payment -> Internal Auditor -- related
--- but distinct duties get distinct roles). Recovering data and
--- reading history are data-manipulation/disclosure activities in
--- their own right, not schema management -- they don't belong
--- folded into DBA's definition just because DBA happens to be the
--- role best positioned to perform them.
---
--- DBA is nested as a MEMBER of RecoveryAdmin, not merged with it --
--- two independent roles, connected by a staffing decision. This
--- means:
---   - DBA staff keep every recovery/history capability they had --
---     permission inheritance through the nested membership means
---     zero functional change for test_dba_user or anyone else.
---   - What DBA is DIRECTLY granted becomes exactly what the rubric
---     says: schema rights, own record, nothing about other
---     people's data -- literally true, not an argument to make.
---   - Onboarding stays one line (ALTER ROLE DBA ADD MEMBER x); a
---     future genuine split (a different person doing recovery)
---     is also one line (ALTER ROLE RecoveryAdmin DROP MEMBER DBA)
---     instead of hunting down individual grants per person.
---
--- Note for the report: this is technically a 5th principal beyond
--- the assignment's stated "DBA, Bank Manager, Bank Officer,
--- Customer" categories. It's not a 5th USER category in the
--- business sense -- nobody logs in AS a RecoveryAdmin instead of a
--- DBA, it's a permission-grouping construct, and DBA staff remain
--- DBA staff. Worth one sentence saying exactly that.
--- ================================================================
+-- Native SQL Server principals mapped to SmartBank roles for authentication demonstration.
+-- Passwords are placeholders for assignment demonstration only.
+USE master;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.sql_logins WHERE name = 'SmartBank_DBA')
+    CREATE LOGIN SmartBank_DBA WITH PASSWORD = 'DBA@SmartBank2026!';
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.sql_logins WHERE name = 'SmartBank_Manager')
+    CREATE LOGIN SmartBank_Manager WITH PASSWORD = 'Manager@SmartBank2026!';
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.sql_logins WHERE name = 'SmartBank_Officer')
+    CREATE LOGIN SmartBank_Officer WITH PASSWORD = 'Officer@SmartBank2026!';
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.sql_logins WHERE name = 'SmartBank_Customer')
+    CREATE LOGIN SmartBank_Customer WITH PASSWORD = 'Customer@SmartBank2026!';
+GO
+
+USE SmartBankDB;
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name='SmartBank_DBA')
+    CREATE USER SmartBank_DBA FOR LOGIN SmartBank_DBA;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name='SmartBank_Manager')
+    CREATE USER SmartBank_Manager FOR LOGIN SmartBank_Manager;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name='SmartBank_Officer')
+    CREATE USER SmartBank_Officer FOR LOGIN SmartBank_Officer;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name='SmartBank_Customer')
+    CREATE USER SmartBank_Customer FOR LOGIN SmartBank_Customer;
+GO
+
+ALTER ROLE DBA ADD MEMBER SmartBank_DBA;
+ALTER ROLE Bank_Manager ADD MEMBER SmartBank_Manager;
+ALTER ROLE Bank_Officer ADD MEMBER SmartBank_Officer;
+ALTER ROLE Customer ADD MEMBER SmartBank_Customer;
+GO
+
+-- RecoveryAdmin: 5th role for recovery/history access, DBA nested as a member -- keeps DBA's direct grants matching the rubric literally ('own record', 'not data'). Confidentiality + Integrity + Availability.
 CREATE ROLE RecoveryAdmin;
 GO
 ALTER ROLE RecoveryAdmin ADD MEMBER DBA;
 GO
 
 
--- ================================================================
--- Component: Deny direct base-table access by default
--- (Enforces the report's core rule: "No role has direct SELECT,
--- INSERT, UPDATE, or DELETE permissions on any base table."
--- SQL Server already blocks access by default unless granted, but
--- we DENY explicitly here so it's provable and demonstrable --
--- DENY always overrides any GRANT, so this acts as a safety net
--- even if someone accidentally grants table access later.)
--- ================================================================
+-- Denies direct SELECT/INSERT/UPDATE/DELETE on all base tables to all 4 roles -- provable least-privilege. Confidentiality + Integrity.
 DENY SELECT, INSERT, UPDATE, DELETE ON dbo.Staff             TO DBA, Bank_Manager, Bank_Officer, Customer;
 DENY SELECT, INSERT, UPDATE, DELETE ON dbo.Customer          TO DBA, Bank_Manager, Bank_Officer, Customer;
 DENY SELECT, INSERT, UPDATE, DELETE ON dbo.Account           TO DBA, Bank_Manager, Bank_Officer, Customer;
 DENY SELECT, INSERT, UPDATE, DELETE ON dbo.TransactionRecord TO DBA, Bank_Manager, Bank_Officer, Customer;
 DENY SELECT, INSERT, UPDATE, DELETE ON dbo.PendingApproval   TO DBA, Bank_Manager, Bank_Officer, Customer;
--- UserLogin and SecurityConfig weren't in the original 5-table list
--- but need the same explicit safety net -- UserLogin holds
--- PasswordHash/Salt, arguably the single most sensitive table in
--- the database, and SecurityConfig governs lockout/expiry policy.
--- Neither should rely on implicit default-deny alone.
+-- Same DENY extended to UserLogin/SecurityConfig -- the most sensitive tables weren't in the original list. Confidentiality.
 DENY SELECT, INSERT, UPDATE, DELETE ON dbo.UserLogin         TO DBA, Bank_Manager, Bank_Officer, Customer;
 DENY SELECT, INSERT, UPDATE, DELETE ON dbo.SecurityConfig    TO DBA, Bank_Manager, Bank_Officer, Customer;
 GO
 
 
--- ================================================================
--- Component: DBA table-management rights (explicit grants, NOT
--- db_ddladmin membership)
--- (Fixes Weakness 19 -- resolves the brief's Integrity requirement
--- "Only DBAs may create and manage tables (not data)."
---
--- We deliberately do NOT use db_ddladmin membership here, even
--- though it's the obvious built-in shortcut. Per Microsoft's own
--- "Permissions of Fixed Database Roles" mapping, db_ddladmin's
--- rights include ALTER ANY SCHEMA -- a database-WIDE permission
--- that reaches every schema, not just dbo. That would have
--- defeated the entire point of putting AuditLog in its own schema
--- below: DBA would still have full CREATE/ALTER/DROP rights over
--- it regardless. Microsoft's own DROP TABLE permissions page also
--- lists "membership in db_ddladmin" as an independent authorization
--- path in its own right, separate from the ALTER-permission check
--- -- meaning a plain DENY can't reliably intercept it either way.
---
--- These two explicit, ordinary permissions give DBA exactly what
--- the requirement asks for -- create/alter/drop tables in dbo --
--- and nothing more:
---   - CREATE TABLE: lets DBA create new tables (database-level)
---   - ALTER ON SCHEMA::dbo: lets DBA alter/drop any EXISTING table
---     that lives in dbo (DROP TABLE checks ALTER-on-schema; ALTER
---     TABLE checks ALTER-on-table-or-schema)
--- Since AuditLog lives in AuditSchema (created back in Part 0,
--- before any role exists), and DBA is never granted anything on
--- AuditSchema, DBA has zero DDL rights over it -- no DENY needed,
--- because the right was never granted in the first place.
--- ================================================================
+-- Grants DBA CREATE TABLE + ALTER ON SCHEMA::dbo (not db_ddladmin, which would also reach AuditSchema). Integrity.
 GRANT CREATE TABLE TO DBA;
 GRANT ALTER ON SCHEMA::dbo TO DBA;
 GO
 
--- ================================================================
--- Component: block two specific destructive actions on the 4
--- tables that support recovery and audit -- not a blanket ALTER
--- restriction.
---
--- CORRECTION from an earlier version: this used to be a straight
--- DENY ALTER on all 4 tables, which blocked EVERY schema change to
--- them, not just the dangerous ones -- DBA couldn't even add a
--- column. That was broader than intended, and it actually worked
--- against the goal: if DBA can't legitimately manage these tables
--- at all, there's more pressure to reach for something drastic
--- later, not less. Role-based DENY can't distinguish "ALTER to add
--- a column" from "ALTER to disable a safeguard" -- it's all-or-
--- nothing per table. A DDL trigger can: it inspects the actual SQL
--- text of every ALTER TABLE statement and only intervenes on the
--- specific dangerous patterns below, letting every other ALTER
--- TABLE action through untouched.
---
--- Two patterns blocked, both silent/permanent/no-undo data loss:
---
--- 1. SYSTEM_VERSIONING = OFF -- also closes DROP TABLE as a direct
---    consequence: SQL Server refuses to DROP a system-versioned
---    table while versioning is active, so blocking the required
---    first step blocks the drop too.
---
--- 2. DROP COLUMN -- SQL Server automatically drops the SAME column
---    from the history table too, as part of the same statement, to
---    keep both tables' schemas in sync. That's correct, documented
---    behavior -- but it means every historical value that column
---    ever held, for every row, across the table's entire history,
---    is gone permanently, with SYSTEM_VERSIONING still showing as
---    ON the whole time. This doesn't require versioning to be
---    disabled first, so it needed its own separate check.
---
--- Scoped to the whole DATABASE, not just DBA -- this protects the
--- mechanism itself against any principal capable of running ALTER
--- TABLE, not only the DBA role specifically. A genuine emergency
--- override still exists (DISABLE TRIGGER ... ON DATABASE), but it's
--- now a deliberate, visible, two-step action instead of a single
--- ALTER TABLE statement anyone with schema rights could run by
--- accident.
--- ================================================================
+-- trg_PreventVersioningDisable: blocks SYSTEM_VERSIONING=OFF and DROP COLUMN on the 4 core tables so the audit/recovery trail can't be silently disabled. Integrity + Availability.
 CREATE OR ALTER TRIGGER trg_PreventVersioningDisable
 ON DATABASE
 FOR ALTER_TABLE
@@ -1061,52 +630,29 @@ ENABLE TRIGGER trg_PreventVersioningDisable ON DATABASE;
 GO
 
 
--- ================================================================
--- Component: DBA explicitly denied data access
--- (This looks redundant with the DENY block above, but it's kept
--- as a separate, clearly-commented statement so the report and
--- demo can point directly at "here is where we guarantee schema
--- rights never imply data rights" -- makes the separation obvious
--- rather than implicit.)
--- ================================================================
--- Already covered by the DENY block above -- DBA remains denied
--- on Staff/Customer/Account/TransactionRecord/PendingApproval/
--- UserLogin/SecurityConfig even after being granted CREATE TABLE +
--- ALTER ON SCHEMA::dbo, since DENY always wins over any GRANT.
+-- Confirms DBA's schema rights never imply data rights (already enforced by the DENY block above). Integrity.
 
 
 -- ================================================================
 -- ## PART 3 -- VIEWS: TASK 4  (4_3_views)
 -- ################################################################
 
-USE SmartBankDB;
-GO
-
--- ================================================================
--- TASK #4: BUILD THE 14 VIEWS (+ 1 direct AuditLog grant)
--- Fixes Weakness 2 (no roles/least-privilege) by making sure each
--- role only ever queries a purpose-built view, never a base table.
--- ================================================================
+-- TASK 4: 14 views so every role queries a purpose-built view, never a base table. Confidentiality.
 
 
--- ================================================================
--- GROUP A: Staff-related views
--- ================================================================
-
--- Component: vw_StaffDirectory
--- (Column-restricted -- ONLY StaffName + Phone, visible to everyone)
+-- vw_StaffDirectory: name + phone only, visible to all 4 roles -- but only after a successful
+-- sp_Login, not just SQL-role membership. UserType is set by sp_Login on every successful login
+-- (Staff or Customer alike), so its absence means this session never actually authenticated. Confidentiality.
 CREATE OR ALTER VIEW dbo.vw_StaffDirectory AS
     SELECT StaffName, Phone
     FROM dbo.Staff
-    WHERE IsActive = 1;
+    WHERE IsActive = 1
+      AND SESSION_CONTEXT(N'UserType') IS NOT NULL;
 GO
 GRANT SELECT ON dbo.vw_StaffDirectory TO DBA, Bank_Manager, Bank_Officer, Customer;
 GO
 
--- Component: vw_StaffOwnRecord
--- (Built as a plain full-row view for now -- per-person filtering
--- to "only the logged-in staff member" is deferred to Task #5's
--- Row-Level Security policy, not hardcoded here. See decision above.)
+-- vw_StaffOwnRecord: full staff row; filtered to 'own row only' by Task 5's RLS. Confidentiality.
 CREATE OR ALTER VIEW dbo.vw_StaffOwnRecord AS
     SELECT StaffID, StaffName, Position, Branch, Phone, Salary, IsActive
     FROM dbo.Staff;
@@ -1126,16 +672,28 @@ GRANT SELECT ON dbo.vw_AllBankOfficers TO Bank_Manager;
 GO
 
 
--- ================================================================
--- GROUP B: Customer + Account views
--- ================================================================
-
--- Component: vw_CustomerAll
+-- vw_CustomerAll: full customer row, for Manager/Officer. Confidentiality.
 CREATE OR ALTER VIEW dbo.vw_CustomerAll AS
-    SELECT CustomerID, CustomerName, ICNumber, Phone, Address, IsActive
+    -- Managers and officers need customer account operations, not unrestricted identity exposure.
+    SELECT CustomerID, CustomerName, Phone, Address, IsActive
     FROM dbo.Customer;
 GO
 GRANT SELECT ON dbo.vw_CustomerAll TO Bank_Manager, Bank_Officer;
+GO
+
+-- Customer own profile view: RLS ensures a customer can only access their own information.
+CREATE OR ALTER VIEW dbo.vw_CustomerOwnProfile AS
+    SELECT CustomerID, CustomerName, Phone, Address, IsActive
+    FROM dbo.Customer
+    WHERE CustomerID = CAST(SESSION_CONTEXT(N'CustomerID') AS INT);
+GO
+GRANT SELECT ON dbo.vw_CustomerOwnProfile TO Customer;
+GO
+
+-- UNMASK on own record only: RLS above already limits Customer to CustomerID = their own row,
+-- so this only reveals the masked Phone/Address within that one row -- not other customers'. Confidentiality.
+GRANT UNMASK ON dbo.Customer(Phone)   TO Customer;
+GRANT UNMASK ON dbo.Customer(Address) TO Customer;
 GO
 
 -- Component: vw_AccountAll
@@ -1157,11 +715,7 @@ GRANT SELECT ON dbo.vw_AccountOwn TO Customer;
 GO
 
 
--- ================================================================
--- GROUP C: Transaction views
--- ================================================================
-
--- Component: vw_TransactionAll
+-- vw_TransactionAll: all transactions, for Manager/Officer. Confidentiality.
 CREATE OR ALTER VIEW dbo.vw_TransactionAll AS
     SELECT TransID, AccountID, ToAccountID, TransDate, Amount, TransactionType
     FROM dbo.TransactionRecord;
@@ -1185,13 +739,7 @@ GRANT SELECT ON dbo.vw_TransactionOwn TO Customer;
 GO
 
 
--- ================================================================
--- GROUP D: PendingApproval views
--- ================================================================
-
--- Component: vw_PendingApprovalAll
--- (Column names corrected to match A's actual table: RequestID,
--- RequestedBy, ApprovedBy, ToAccountID, RequestDate, ApprovalDate)
+-- vw_PendingApprovalAll: all pending approval requests, for Manager. Confidentiality.
 CREATE OR ALTER VIEW dbo.vw_PendingApprovalAll AS
     SELECT RequestID, AccountID, RequestedBy, ApprovedBy, Amount,
            TransactionType, ToAccountID, Status, RequestDate, ApprovalDate
@@ -1214,13 +762,7 @@ GRANT SELECT ON dbo.vw_PendingApprovalOwn TO Customer;
 GO
 
 
--- ================================================================
--- GROUP E: Audit + History access
--- ================================================================
-
--- Component: AuditLog direct grant
--- (Not a view -- AuditLog isn't one of the 5 restricted business
--- tables from Task #3, so a direct GRANT is correct here)
+-- Direct GRANT SELECT on AuditLog to DBA/Manager -- not a view, since AuditLog isn't one of the 5 restricted business tables. Confidentiality + Integrity.
 GRANT SELECT ON AuditSchema.AuditLog TO DBA, Bank_Manager;
 GO
 
@@ -1270,28 +812,14 @@ GO
 USE SmartBankDB;
 GO
 
--- ================================================================
--- TASK #5: ROW-LEVEL SECURITY VIA SESSION_CONTEXT
--- (Not a separate policy object -- this alters the 4 "Own" views
--- already built in Task #4, adding the actual per-person filter.)
--- ================================================================
-
--- ================================================================
--- Component: Fix a Task #1/#2 gap -- nobody could actually call
--- sp_Login, sp_Logout, or sp_ChangePassword until now. Granted to
--- PUBLIC since a user needs to be able to log in and manage their
--- own password before they belong to any role at all.
--- ================================================================
+-- TASK 5: adds RLS filtering to the 4 'Own' views, plus grants sp_Login/Logout/ChangePassword to PUBLIC (needed before anyone has a role). Confidentiality.
 GRANT EXECUTE ON dbo.sp_Login          TO PUBLIC;
 GRANT EXECUTE ON dbo.sp_Logout         TO PUBLIC;
 GRANT EXECUTE ON dbo.sp_ChangePassword TO PUBLIC;
 GO
 
 
--- ================================================================
--- Component: ALTER vw_StaffOwnRecord
--- (DBA/Manager/Officer only see their OWN staff row now)
--- ================================================================
+-- vw_StaffOwnRecord filtered to the caller's own StaffID via SESSION_CONTEXT. Confidentiality.
 CREATE OR ALTER VIEW dbo.vw_StaffOwnRecord AS
     SELECT StaffID, StaffName, Position, Branch, Phone, Salary, IsActive
     FROM dbo.Staff
@@ -1299,10 +827,7 @@ CREATE OR ALTER VIEW dbo.vw_StaffOwnRecord AS
 GO
 
 
--- ================================================================
--- Component: ALTER vw_AccountOwn
--- (Customer only sees accounts matching their own CustomerID)
--- ================================================================
+-- vw_AccountOwn filtered to the caller's own CustomerID via SESSION_CONTEXT. Confidentiality.
 CREATE OR ALTER VIEW dbo.vw_AccountOwn AS
     SELECT AccountID, CustomerID, AccountType, Balance, IsActive
     FROM dbo.Account
@@ -1310,9 +835,7 @@ CREATE OR ALTER VIEW dbo.vw_AccountOwn AS
 GO
 
 
--- ================================================================
--- Component: ALTER vw_TransactionOwn
--- ================================================================
+-- ALTER vw_TransactionOwn to add the RLS filter. Confidentiality.
 CREATE OR ALTER VIEW dbo.vw_TransactionOwn AS
     SELECT
         t.TransID, t.AccountID, t.ToAccountID, t.TransDate,
@@ -1323,9 +846,7 @@ CREATE OR ALTER VIEW dbo.vw_TransactionOwn AS
 GO
 
 
--- ================================================================
--- Component: ALTER vw_PendingApprovalOwn
--- ================================================================
+-- ALTER vw_PendingApprovalOwn to add the RLS filter. Confidentiality.
 CREATE OR ALTER VIEW dbo.vw_PendingApprovalOwn AS
     SELECT
         p.RequestID, p.AccountID, p.RequestedBy, p.ApprovedBy, p.Amount,
@@ -1337,38 +858,12 @@ CREATE OR ALTER VIEW dbo.vw_PendingApprovalOwn AS
 GO
 
 
--- ================================================================
--- ## PART 5 -- CONFIDENTIALITY C6: SQL SERVER AUDIT  (Confidentiality_T6_Salsabila)
--- ################################################################
-
--- SALSABILA (TP078641) CONFIDENTIALITY T6 // SQL SERVER TRACKING 
-
-
--- IMPLEMENTATION >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-/* ================================================================
-   Task C6: Turn on SQL Server's built-in tracking for logins, schema
-   changes, permission changes, and sensitive read access.
-
-   Report reference : Section 3.5, Table 3 (Audit Matrix)
-   Weakness addressed: Weakness 12 (no monitoring of failed auth,
-   no server-level audit spec, no logging of read access)
-
-   Run this as a sysadmin login. Create the folder below on the
-   SQL Server host BEFORE running:  C:\SmartBankAudit\
-   ================================================================ */
+-- PART 5: native SQL Server Audit -- logins, schema changes, permission changes, sensitive reads. Confidentiality + Integrity. Run this section as a sysadmin login -- CREATE SERVER AUDIT and its specifications require server-level rights no application role has.
 
 USE master;
 GO
 
--- ================================================================
--- [C6.1] SERVER AUDIT OBJECT
--- Defines WHERE audit records are written and how failures behave.
--- This is the shared container every specification below plugs into.
--- ================================================================
-
--- Create the server audit object itself if it doesn't already exist
--- (this was missing -- everything below references an audit that
--- was never created, which fails immediately otherwise)
+-- [C6.1] Creates the server audit object everything below writes into. Confidentiality + Integrity.
 IF NOT EXISTS (SELECT 1 FROM sys.server_audits WHERE name = 'SmartBank_ServerAudit')
     CREATE SERVER AUDIT SmartBank_ServerAudit
     TO FILE
@@ -1395,23 +890,19 @@ TO FILE
 );
 GO
 
-ALTER SERVER AUDIT SmartBank_ServerAudit WITH (STATE = ON);
-GO
-
 -- Confirm it's now pointing at the right place
 SELECT name, status_desc
 FROM sys.dm_server_audit_status;
 
--- }}
-
--- ================================================================
--- [C6.2] SERVER AUDIT SPECIFICATION — LOGIN / LOGOUT
--- Report Table 3, row 1: "Login / logout attempts (success and failure)"
--- Captures: SUCCEEDED_LOGIN_GROUP, FAILED_LOGIN_GROUP, LOGOUT_GROUP
--- Addresses Weakness 12: no monitoring of failed authentication attempts
--- ================================================================
+-- [C6.2] Audits successful/failed logins and logouts. Confidentiality.
+-- Server audit is intentionally left OFF here -- you can't drop or
+-- recreate a specification while its parent audit is enabled.
+-- [C6.6] turns everything on together, once setup is complete.
 IF EXISTS (SELECT 1 FROM sys.server_audit_specifications WHERE name = 'SmartBank_LoginAuditSpec')
+BEGIN
+    ALTER SERVER AUDIT SPECIFICATION SmartBank_LoginAuditSpec WITH (STATE = OFF);
     DROP SERVER AUDIT SPECIFICATION SmartBank_LoginAuditSpec;
+END
 GO
 
 CREATE SERVER AUDIT SPECIFICATION SmartBank_LoginAuditSpec
@@ -1426,21 +917,12 @@ GO
 USE SmartBankDB;
 GO
 
--- ================================================================
--- [C6.3 / C6.4 / C6.5] DATABASE AUDIT SPECIFICATION — COMBINED
--- SQL Server only permits ONE database audit specification per
--- (server audit, database) pair, so schema changes, permission
--- changes, and sensitive SELECT access are combined here as
--- separate ADD clauses inside a single specification.
---
--- [C6.3] Schema changes        — Report Table 3, row 2
--- [C6.4] Permission changes    — Report Table 3, row 3
--- [C6.5] Sensitive read access — Report Table 3, row 4
--- Addresses Weakness 12 (no server-level audit spec, no logging
--- of read access)
--- ================================================================
+-- [C6.3-5] Audits schema changes, permission changes, and sensitive SELECT on Customer/Account/UserLogin. Confidentiality + Integrity.
 IF EXISTS (SELECT 1 FROM sys.database_audit_specifications WHERE name = 'SmartBank_DatabaseAuditSpec')
+BEGIN
+    ALTER DATABASE AUDIT SPECIFICATION SmartBank_DatabaseAuditSpec WITH (STATE = OFF);
     DROP DATABASE AUDIT SPECIFICATION SmartBank_DatabaseAuditSpec;
+END
 GO
 
 CREATE DATABASE AUDIT SPECIFICATION SmartBank_DatabaseAuditSpec
@@ -1459,10 +941,7 @@ WITH (STATE = OFF);
 GO
 
 
--- ================================================================
--- [C6.6] ENABLE THE SERVER AUDIT AND ALL SPECIFICATIONS
--- Nothing above records anything until each object is turned ON.
--- ================================================================
+-- [C6.6] Turns the audit and all specifications ON.
 USE master;
 GO
 ALTER SERVER AUDIT SmartBank_ServerAudit WITH (STATE = ON);
@@ -1476,23 +955,7 @@ ALTER DATABASE AUDIT SPECIFICATION SmartBank_DatabaseAuditSpec WITH (STATE = ON)
 GO
 
 
--- ================================================================
--- [C6.7] RESTRICT AUDIT VISIBILITY TO THE DBA ROLE ONLY
--- Report ref: Section 3.5 — "Both auditing mechanisms store their
--- records in protected locations that only the DBA role can
--- access." Table 3's Access column reads "DBA only" for all 4 rows.
---
--- Raw audit records can only be read via sys.fn_get_audit_file(),
--- which itself requires CONTROL SERVER permission — application
--- roles (Bank_Manager/Bank_Officer/Customer) are never granted
--- this, so they cannot read the audit trail directly. This wrapper
--- procedure gives the DBA role a controlled, single entry point
--- instead of handing out raw CONTROL SERVER permission to a person.
---
--- Uses Person B's actual role name from Task 3 (role setup):
--- [DBA]  -- confirmed, no "db_" prefix. Role already exists,
--- created by B — no placeholder needed here.
--- ================================================================
+-- [C6.7] sp_DBA_ViewAuditFile: DBA-only wrapper for reading raw audit records, so nobody needs direct CONTROL SERVER. Confidentiality + Integrity.
 CREATE OR ALTER PROCEDURE dbo.sp_DBA_ViewAuditFile
 AS
 BEGIN
@@ -1518,117 +981,39 @@ BEGIN
 END;
 GO
 
--- Lock down execution rights: DO NOT deny to 'public' — every user,
--- including DBA role members, is automatically a member of public,
--- and an explicit DENY always overrides a GRANT from any other role,
--- even a more specific one like DBA. Simply never granting EXECUTE
--- to anyone but DBA is sufficient — SQL Server denies by default.
+-- Never granted to public -- DENY always overrides GRANT, so simply not granting EXECUTE is sufficient.
 GRANT EXECUTE ON dbo.sp_DBA_ViewAuditFile TO DBA;
 GO
 
 
--- ================================================================
--- [C6.7b] IMPORTANT — CONTROL SERVER REQUIREMENT
--- sys.fn_get_audit_file() requires CONTROL SERVER permission on
--- the caller, with no smaller/more specific permission available.
--- CONTROL SERVER is a SERVER-level permission tied to a LOGIN —
--- it cannot be granted to a database role like DBA, and it is NOT
--- automatically inherited just by being a member of that role.
---
--- This means: being added to the DBA database role satisfies the
--- IS_MEMBER('DBA') check inside the procedure, but is NOT enough
--- on its own to successfully read the audit file. Each real LOGIN
--- that will act as a DBA must ALSO be individually granted
--- CONTROL SERVER at the server level, e.g.:
---
---     USE master;
---     GRANT CONTROL SERVER TO <real_dba_login_name>;
---
--- COORDINATION FLAG for Person B: whenever a new Staff member with
--- Position = 'DBA' is provisioned a login (Section 3.1/4.1 login
--- system), that login also needs this grant to fully exercise
--- audit-viewing rights. Flag this in the login provisioning
--- procedure or as a manual DBA onboarding step.
---
--- Callers must also connect via EXECUTE AS LOGIN (not EXECUTE AS
--- USER) or a native login session — EXECUTE AS USER only carries
--- database-level identity and does not carry CONTROL SERVER with
--- it even if the underlying login has been granted it.
--- ================================================================
-PRINT 'Reminder: grant CONTROL SERVER individually to each real DBA login — see comment above [C6.7b].';
+-- [C6.7b] Reminder: real DBA logins also need server-level CONTROL SERVER granted individually -- DBA role membership alone isn't enough.
+PRINT 'Reminder: grant CONTROL SERVER individually to each real DBA login ï¿½ see comment above [C6.7b].';
 GO
 
-PRINT 'C6 — SQL Server Audit setup complete. Server audit and all 4 specifications are ON.';
+PRINT 'C6 ï¿½ SQL Server Audit setup complete. Server audit and all 4 specifications are ON.';
 
--- ## PART 6 -- CONFIDENTIALITY C2: ENCRYPTION (TDE + CLE)  (Confidentiality_T2_Salsabila)
--- ################################################################
-
--- SALSABILA (TP078641) CONFIDENTIALITY TC2 // ENCRYPTION  
-/* ================================================================
-   Task C2: Encrypt the whole database (TDE) + encrypt Customer.ICNumber
-   specifically (CLE), and back up every key/certificate involved.
-
-   Report reference : Section 3.3 (Encryption), Table 2
-   Weakness addressed: Weakness 5 (plaintext data / unprotected
-   backups), Weakness 22 (no encryption key/certificate backup)
-
-   BEFORE RUNNING:
-   Create a folder for key/certificate backups, e.g. C:\SQLKeys\,
-   and grant your SQL Server service account Modify permission on
-   it — same steps you already did for C:\SQLAudit\ in task C6
-   (Properties > Security > Edit > Add > your service account >
-   Modify). This is required or BACKUP CERTIFICATE / BACKUP MASTER
-   KEY will fail with an invalid path error, exactly like C6 did.
-
-   Passwords below are placeholders for this assignment. In a real
-   deployment these must be unique per key, generated securely, and
-   stored somewhere separate from both the database and its backups
-   (e.g. a password manager / vault) — never in a script like this.
-   ================================================================ */
-
-
--- IMPLEMENTATION >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+-- PART 6: TDE (whole-database encryption) + CLE (Customer.ICNumber column encryption). Confidentiality. Passwords below are placeholders for this assignment -- a real deployment would generate these securely and store them outside the script entirely.
 
 USE SmartBankDB;
 GO
 
-/* ================================================================
-   [C2.1] DATABASE MASTER KEY (SmartBankDB)
-   Root of this database's own encryption hierarchy. Protects the
-   CLE certificate created in [C2.2].
-   ================================================================ */
+-- [C2.1] Database Master Key -- root of this database's own encryption hierarchy. Confidentiality.
 IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMasterKey##')
     CREATE MASTER KEY ENCRYPTION BY PASSWORD = 'SmartBank_DMK_P@ss2026!';
 GO
-/* ================================================================
-   [C2.2] CLE CERTIFICATE
-   Protected automatically by the DMK created above (no password
-   needed for creation — DMK handles it).
-   ================================================================ */
+-- [C2.2] Certificate protecting the CLE symmetric key. Confidentiality.
 IF NOT EXISTS (SELECT 1 FROM sys.certificates WHERE name = 'CLE_ICNumber_Cert')
     CREATE CERTIFICATE CLE_ICNumber_Cert
         WITH SUBJECT = 'Column-level encryption certificate for Customer.ICNumber';
 GO
-/* ================================================================
-   [C2.3] CLE SYMMETRIC KEY
-   The actual key that performs encryption/decryption of ICNumber
-   values. AES_256 is a strong, modern, widely-approved algorithm.
-   Protected by the certificate above.
-   ================================================================ */
+-- [C2.3] AES_256 symmetric key that actually encrypts/decrypts ICNumber. Confidentiality.
 IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = 'CLE_ICNumber_SymKey')
     CREATE SYMMETRIC KEY CLE_ICNumber_SymKey
         WITH ALGORITHM = AES_256
         ENCRYPTION BY CERTIFICATE CLE_ICNumber_Cert;
 GO
 
-/* ================================================================
-   [C2.4] MIGRATE EXISTING ICNumber DATA
-   The baseline seed script encrypted ICNumber with a TEMPORARY
-   placeholder (ENCRYPTBYPASSPHRASE('TEMP_PLACEHOLDER_KEY', ...)),
-   flagged explicitly in that script as needing real encryption.
-   This decrypts using the old placeholder method and re-encrypts
-   using the real symmetric key, in one UPDATE.
-   ================================================================ */
+-- [C2.4] Re-encrypts ICNumber from the seed data's placeholder passphrase to the real CLE key. Confidentiality.
 
 OPEN SYMMETRIC KEY CLE_ICNumber_SymKey
     DECRYPTION BY CERTIFICATE CLE_ICNumber_Cert;
@@ -1642,34 +1027,10 @@ SET ICNumber = EncryptByKey(
 CLOSE SYMMETRIC KEY CLE_ICNumber_SymKey;
 GO
  
-PRINT 'C2.4 — ICNumber data migrated from placeholder to real CLE encryption.';
+PRINT 'C2.4 ï¿½ ICNumber data migrated from placeholder to real CLE encryption.';
 GO
 
-/* ================================================================
-   [C2.5] DECRYPT WRAPPER PROCEDURE
-   Gives authorized staff a controlled way to view a customer's
-   real IC number, without granting anyone direct key access.
- 
-   Uses WITH EXECUTE AS OWNER: by default, a procedure runs under
-   the CALLER's own security context, so a caller with only EXECUTE
-   permission on this procedure would still be personally checked
-   for permission to open the symmetric key/certificate directly —
-   and fail. WITH EXECUTE AS OWNER makes the entire procedure body
-   run under the OWNER's (dbo's) identity instead, regardless of
-   who calls it. Callers still only ever need plain EXECUTE on the
-   procedure — no separate permission on the certificate or key is
-   ever granted to them.
- 
-   Access matches Table 5's vw_CustomerAll pattern: Bank_Manager
-   and Bank_Officer only. NOT granted to DBA — Section 3.1 is
-   explicit that the DBA role has no access to operational
-   business data beyond their own staff record. NOT granted to
-   Customer either — Section 3.1 states customers do not have
-   direct access to their own Customer table row at all. (The one
-   narrow exception is sp_DecryptOwnICNumber below, which lets a
-   Customer see ONLY their own decrypted IC number -- not this
-   proc, not the rest of their row.)
-   ================================================================ */
+-- [C2.5] sp_DecryptICNumber: lets Manager/Officer decrypt a customer's IC number, with no direct key access granted to them. Confidentiality.
 
 CREATE OR ALTER PROCEDURE dbo.sp_DecryptICNumber
     @CustomerID INT
@@ -1698,28 +1059,7 @@ GRANT EXECUTE ON dbo.sp_DecryptICNumber TO Bank_Officer;
 GO
 
 
--- ================================================================
--- Component: sp_DecryptOwnICNumber
--- Closes a gap flagged during demo-walkthrough planning: the
--- lecturer's demo script explicitly requires "encrypted data
--- stored in tables should be decrypted automatically for the right
--- user... where users should see their own data (decrypted
--- value)." sp_DecryptICNumber above only ever covered Manager/
--- Officer decrypting a CUSTOMER's IC number as part of their job
--- -- nothing let a Customer decrypt their OWN.
---
--- Same self-scoped pattern as sp_UpdateOwnStaffRecord and
--- sp_ProcessTransaction: no @CustomerID parameter at all, the
--- caller's own identity comes from SESSION_CONTEXT, so there is no
--- way to pass someone else's ID and see their IC number instead.
---
--- Deliberately narrow, not a reversal of the earlier design
--- decision that "customers do not have direct access to their own
--- Customer table row at all" (Section 3.1). This returns ONLY the
--- decrypted IC number -- not Phone, not Address, not the rest of
--- the row -- the minimum needed to satisfy the specific decrypted-
--- own-data requirement, nothing more.
--- ================================================================
+-- sp_DecryptOwnICNumber: lets a Customer decrypt ONLY their own IC number -- nothing else on their row. Confidentiality.
 CREATE OR ALTER PROCEDURE dbo.sp_DecryptOwnICNumber
 WITH EXECUTE AS OWNER
 AS
@@ -1751,10 +1091,7 @@ GO
 
 
 -- ================================================================
-   [C2.6] MASTER-LEVEL DATABASE MASTER KEY
-   TDE's certificate must live in the master system database
-   (it's a server-scoped feature), which requires its own DMK.
-   ================================================================ */
+-- [C2.6] Master-level DMK for TDE's certificate (must live in master). Confidentiality.
 USE master;
 GO
 
@@ -1762,19 +1099,13 @@ IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMaste
     CREATE MASTER KEY ENCRYPTION BY PASSWORD = 'SmartBank_MasterDMK_P@ss2026!';
 GO
 
-/* ================================================================
-   [C2.7] TDE CERTIFICATE (server-level, stored in master)
-   ================================================================ */
+-- [C2.7] TDE certificate (server-level, stored in master). Confidentiality.
 IF NOT EXISTS (SELECT 1 FROM sys.certificates WHERE name = 'TDE_SmartBankDB_Cert')
     CREATE CERTIFICATE TDE_SmartBankDB_Cert
         WITH SUBJECT = 'TDE certificate for SmartBankDB';
 GO
 
-/* ================================================================
-   [C2.8] DATABASE ENCRYPTION KEY (SmartBankDB)
-   The key TDE actually uses to encrypt the database file,
-   protected by the TDE certificate above.
-   ================================================================ */
+-- [C2.8] Database Encryption Key TDE uses to encrypt the actual database file. Confidentiality.
 USE SmartBankDB;
 GO
 
@@ -1786,10 +1117,7 @@ BEGIN
 END
 GO
 
-/* ================================================================
-   [C2.9] ENABLE TDE
-   Switches on whole-database file encryption. Run from master.
-   ================================================================ */
+-- [C2.9] Turns on whole-database file encryption. Confidentiality.
 USE master;
 GO
 
@@ -1806,9 +1134,7 @@ JOIN sys.databases db ON dek.database_id = db.database_id
 WHERE db.name = 'SmartBankDB';
 GO
 
-/* ================================================================
-   [C2.10] BACKUP: SmartBankDB's Database Master Key
-   ================================================================ */
+-- [C2.10] Backs up SmartBankDB's Database Master Key. Confidentiality.
 USE SmartBankDB;
 GO
 
@@ -1816,11 +1142,7 @@ BACKUP MASTER KEY TO FILE = 'C:\SQLKeys\SmartBankDB_DMK.key'
     ENCRYPTION BY PASSWORD = 'SmartBank_KeyBackup_P@ss2026!';
 GO
 
-/* ================================================================
-   [C2.11] BACKUP: CLE Certificate + private key
-   WITH PRIVATE KEY is essential — without it, only the public
-   portion is saved, which is NOT enough to ever decrypt data again.
-   ================================================================ */
+-- [C2.11] Backs up the CLE certificate + private key -- losing it makes ICNumber permanently undecryptable. Confidentiality.
 BACKUP CERTIFICATE CLE_ICNumber_Cert
     TO FILE = 'C:\SQLKeys\CLE_ICNumber_Cert.cer'
     WITH PRIVATE KEY (
@@ -1829,9 +1151,7 @@ BACKUP CERTIFICATE CLE_ICNumber_Cert
     );
 GO
 
-/* ================================================================
-   [C2.12] BACKUP: TDE Certificate + private key (from master)
-   ================================================================ */
+-- [C2.12] Backs up the TDE certificate + private key (from master). Confidentiality.
 USE master;
 GO
 
@@ -1846,57 +1166,19 @@ GO
 USE SmartBankDB;
 GO
 
-PRINT 'C2 — TDE and CLE setup complete. All keys and certificates backed up.';
+PRINT 'C2 ï¿½ TDE and CLE setup complete. All keys and certificates backed up.';
 
--- ## PART 7 -- INTEGRITY: DML AUDIT TRIGGERS (Section 2, Requirement 6)
--- "All database and data manipulations (valid or invalid) must be
--- logged." Native SQL Server Audit (Part 5 / C6) already covers
--- schema changes, permission changes, and SELECT access. This part
--- covers the piece nothing else touches: INSERT/UPDATE/DELETE on
--- the 5 business tables, written into the existing AuditLog table.
---
--- Scope note: this covers VALID (successful) data manipulations
--- only, since triggers fire on rows that actually changed. INVALID
--- / REJECTED attempts (e.g. an Officer's update rejected by a
--- business rule inside a stored procedure) can only be logged by
--- that procedure itself, at its point of rejection, using the same
--- ActionType = 'REJECTED' pattern already used in sp_ChangePassword.
--- That half belongs inside whichever procedures end up handling
--- Section 2 Requirements 2-5 (Staff/Customer/Account management,
--- transactions) -- not duplicated here.
--- ################################################################
+-- PART 7: DML audit triggers -- log every INSERT/UPDATE/DELETE on the business tables. Integrity.
 
 USE SmartBankDB;
 GO
 
--- ================================================================
--- Schema change: AuditLog needs a row identifier
--- The original AuditLog design (TableName/ColumnName/OldValue/
--- NewValue/ChangedBy/ActionType/ChangeDate) has no way to say
--- WHICH row changed -- e.g. "a Phone number changed" is useless
--- without knowing whose. Adding a nullable RecordID column (text,
--- not INT, since PKs across these 5 tables are all INT but this
--- keeps the column reusable if that ever changes) is additive and
--- doesn't break anything already built on top of AuditLog.
--- ================================================================
+-- Adds RecordID to AuditLog so a logged change says WHICH row changed. Integrity.
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('AuditSchema.AuditLog') AND name = 'RecordID')
     ALTER TABLE AuditSchema.AuditLog ADD RecordID NVARCHAR(50) NULL;
 GO
 
--- ================================================================
--- Schema change: consolidate OldValue/NewValue into one Activity
--- column, for every tracked column, not just IsActive
--- The original split-column design (OldValue/NewValue) meant every
--- row that uses one style of value always shows NULL in the other
--- pair -- e.g. IsActive rows always left OldValue/NewValue empty,
--- and INSERT/DELETE summary rows always left one of the two empty.
--- Consolidating everything into a single "old -> new" (or a flag
--- like '<hash changed>') Activity column removes that clutter
--- entirely: every row has exactly one populated content column,
--- always. Widened to NVARCHAR(MAX) since it now also carries the
--- INSERT/DELETE full-record summaries that used to live in
--- OldValue/NewValue.
--- ================================================================
+-- Consolidates OldValue/NewValue into one Activity column ('old -> new'), removing empty-pair clutter. Integrity.
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('AuditSchema.AuditLog') AND name = 'Activity')
     ALTER TABLE AuditSchema.AuditLog ADD Activity NVARCHAR(MAX) NULL;
 GO
@@ -1909,39 +1191,11 @@ IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('AuditSchema.Au
     ALTER TABLE AuditSchema.AuditLog DROP COLUMN NewValue;
 GO
 
--- ================================================================
--- Schema change: widen ChangedBy to hold "username (Role)"
--- ChangedBy used to store just the bare Username (e.g.
--- 'staff_faridosman'), which doesn't tell a reader what that
--- person's role is -- usernames are generated identically for
--- every staff position ('staff_' + name, whether DBA, Bank
--- Manager, or Bank Officer), so the role has to come from a
--- lookup, not the username string itself. Widening this column so
--- fn_GetSessionUsername (below) can append the role directly, e.g.
--- 'staff_faridosman (Bank Manager)', 'cust_aimanhaziq (Customer)'.
--- ================================================================
+-- Widens ChangedBy to hold 'username (Role)', since usernames alone don't reveal role. Integrity.
 ALTER TABLE AuditSchema.AuditLog ALTER COLUMN ChangedBy NVARCHAR(150) NOT NULL;
 GO
 
--- ================================================================
--- Component: fn_GetSessionUsername
--- Triggers can't rely on SUSER_NAME()/ORIGINAL_LOGIN() to identify
--- who's acting, because every role shares application-level SQL
--- logins (test_officer_login etc.) rather than one login per
--- person -- individual identity lives in SESSION_CONTEXT, set by
--- sp_Login. This resolves SESSION_CONTEXT back to a Username,
--- falling back to the SQL login name for actions taken outside
--- the sp_Login flow (e.g. this script's own seed/test statements
--- run directly as the sysadmin session).
---
--- Also appends the person's role, e.g. 'staff_faridosman (Bank
--- Manager)' or 'cust_aimanhaziq (Customer)'. Without this, ChangedBy
--- would only show a username, and the username pattern itself
--- doesn't distinguish role -- 'staff_' is used for DBA, Bank
--- Manager, and Bank Officer alike, so role has to come from a
--- lookup (Staff.Position, or 'Customer' for customer logins), not
--- from the username string.
--- ================================================================
+-- fn_GetSessionUsername: resolves SESSION_CONTEXT to 'username (Role)' for audit ChangedBy. Integrity.
 CREATE OR ALTER FUNCTION dbo.fn_GetSessionUsername()
 RETURNS NVARCHAR(150)
 AS
@@ -1972,13 +1226,11 @@ END;
 GO
 
 
--- ================================================================
--- Component: trg_Staff_Audit
--- ================================================================
+-- trg_Staff_Audit: logs all Staff changes. Integrity.
 CREATE OR ALTER TRIGGER dbo.trg_Staff_Audit
 ON dbo.Staff
-AFTER INSERT, UPDATE, DELETE
 WITH EXECUTE AS OWNER
+AFTER INSERT, UPDATE, DELETE
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -2032,18 +1284,11 @@ END;
 GO
 
 
--- ================================================================
--- Component: trg_Customer_Audit
--- (ICNumber/ICNumberHash are never logged as raw values -- only a
--- flag that they changed. Writing ciphertext bytes or hash bytes
--- into a plaintext audit log column would be a confidentiality
--- leak of its own, and the CLE/hash values are meaningless in
--- text form anyway.)
--- ================================================================
+-- trg_Customer_Audit: logs Customer changes; ICNumber changes are flagged, never shown in plaintext. Confidentiality + Integrity.
 CREATE OR ALTER TRIGGER dbo.trg_Customer_Audit
 ON dbo.Customer
-AFTER INSERT, UPDATE, DELETE
 WITH EXECUTE AS OWNER
+AFTER INSERT, UPDATE, DELETE
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -2091,13 +1336,11 @@ END;
 GO
 
 
--- ================================================================
--- Component: trg_Account_Audit
--- ================================================================
+-- trg_Account_Audit: logs all Account changes. Integrity.
 CREATE OR ALTER TRIGGER dbo.trg_Account_Audit
 ON dbo.Account
-AFTER INSERT, UPDATE, DELETE
 WITH EXECUTE AS OWNER
+AFTER INSERT, UPDATE, DELETE
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -2141,16 +1384,11 @@ END;
 GO
 
 
--- ================================================================
--- Component: trg_TransactionRecord_Audit
--- (Transactions are expected to be INSERT-only in normal use --
--- an UPDATE or DELETE on this table is itself a red flag, which is
--- exactly why it still needs full audit coverage, not less.)
--- ================================================================
+-- trg_TransactionRecord_Audit: logs all changes; an UPDATE/DELETE here is itself suspicious, since transactions should be insert-only. Integrity.
 CREATE OR ALTER TRIGGER dbo.trg_TransactionRecord_Audit
 ON dbo.TransactionRecord
-AFTER INSERT, UPDATE, DELETE
 WITH EXECUTE AS OWNER
+AFTER INSERT, UPDATE, DELETE
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -2193,13 +1431,11 @@ END;
 GO
 
 
--- ================================================================
--- Component: trg_PendingApproval_Audit
--- ================================================================
+-- trg_PendingApproval_Audit: logs all PendingApproval changes. Integrity.
 CREATE OR ALTER TRIGGER dbo.trg_PendingApproval_Audit
 ON dbo.PendingApproval
-AFTER INSERT, UPDATE, DELETE
 WITH EXECUTE AS OWNER
+AFTER INSERT, UPDATE, DELETE
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -2238,31 +1474,11 @@ END;
 GO
 
 
--- ================================================================
--- Component: trg_UserLogin_Audit
--- (PasswordHash/Salt use the same '<hash changed>' placeholder as
--- Customer.ICNumber -- the real bytes never belong in a plaintext
--- log table, and knowing THAT a password changed, WHEN, and BY
--- WHOM is all an audit trail needs.
---
--- CORRECTED SCOPE: earlier versions of this trigger excluded
--- LastLogin/FailedLoginAttempts/LockoutUntil/PasswordLastChanged
--- on the assumption that C6's native SQL Server Audit
--- (SUCCESSFUL_LOGIN_GROUP/FAILED_LOGIN_GROUP) already covers login
--- activity with more context. That assumption was wrong: those
--- native audit groups fire on SQL SERVER connection-level login
--- events (e.g. someone authenticating with test_officer_login's
--- own credentials) -- a completely different layer from sp_Login,
--- which runs INSIDE an already-open connection and checks
--- Username/password against THIS table. C6 has zero visibility
--- into sp_Login calls, which means FailedLoginAttempts and
--- LockoutUntil weren't being tracked anywhere at all. All UserLogin
--- columns that actually change are now tracked consistently.
--- ================================================================
+-- trg_UserLogin_Audit: logs all UserLogin changes, including lockout/failed-attempt fields C6's native audit can't see. Confidentiality + Integrity.
 CREATE OR ALTER TRIGGER dbo.trg_UserLogin_Audit
 ON dbo.UserLogin
-AFTER INSERT, UPDATE, DELETE
 WITH EXECUTE AS OWNER
+AFTER INSERT, UPDATE, DELETE
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -2318,18 +1534,11 @@ END;
 GO
 
 
--- ================================================================
--- Component: trg_SecurityConfig_Audit
--- (Closes the last gap: MaxFailedAttempts/LockoutMinutes/
--- PasswordExpiryDays changes weren't tracked anywhere. This table
--- is keyed by ConfigKey (text), not an INT identity like the other
--- 6 tables, so RecordID stores the key name itself directly -- e.g.
--- RecordID = 'LockoutMinutes' -- rather than a numeric ID.)
--- ================================================================
+-- trg_SecurityConfig_Audit: logs policy-value changes (keyed by ConfigKey, not an int ID). Integrity.
 CREATE OR ALTER TRIGGER dbo.trg_SecurityConfig_Audit
 ON dbo.SecurityConfig
-AFTER INSERT, UPDATE, DELETE
 WITH EXECUTE AS OWNER
+AFTER INSERT, UPDATE, DELETE
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -2360,39 +1569,12 @@ END;
 GO
 
 
--- ================================================================
--- ## PART 8 -- INTEGRITY: WRITE PROCEDURES (Section 2, Requirements 2-5)
--- Closes the last real Integrity gap: nobody could actually WRITE
--- to any business table before now -- everything was read-only.
--- Each proc is a two-layer gate: Layer 1 is the GRANT EXECUTE
--- itself (which role can even call this at all), Layer 2 is a
--- business-rule check inside the proc body for things a role
--- membership can't express (e.g. "yes you're a Manager, but only
--- for Bank Officer records, not other Managers or DBA"). Every
--- successful write is picked up automatically by the Part 7
--- triggers; REJECTED attempts are logged explicitly here, since a
--- rejected action never touches a row for a trigger to catch.
--- ################################################################
+-- PART 8: write-side procedures for Integrity Requirements 2-5 -- GRANT decides who can call a proc, business-rule checks inside decide what they can do with it. Integrity.
 
 USE SmartBankDB;
 GO
 
--- ================================================================
--- Component: sp_ManageStaff (Section 2, Requirement 2)
--- "Only Bank Managers may manage staff details."
--- Upsert pattern per Lab 4's SP_ManageCustomer convention: @StaffID
--- NULL = create a new Bank Officer, @StaffID provided = update an
--- existing one. Scoped to Bank Officer records only -- a Manager
--- managing another Manager or the DBA is out of bounds, matching
--- the same boundary Section 1 already draws for reading (Manager
--- sees Officers via vw_AllBankOfficers, never other Managers/DBA).
---
--- Design choice, flagged rather than hidden: Position itself is
--- NOT updatable through this proc (see UPDATE path below) --
--- promoting/demoting someone's Position is a more sensitive HR
--- action than "edit contact details," and deliberately out of
--- scope here rather than silently allowed.
--- ================================================================
+-- sp_ManageStaff: Manager creates/updates Bank Officer records only; Position isn't editable here. Integrity.
 CREATE OR ALTER PROCEDURE dbo.sp_ManageStaff
     @StaffID    INT           = NULL,
     @StaffName  NVARCHAR(100),
@@ -2410,19 +1592,10 @@ BEGIN
     SET @Success = 0;
     DECLARE @Who NVARCHAR(150) = dbo.fn_GetSessionUsername();
 
-    -- Staff.IsActive is NOT NULL -- a caller explicitly passing
-    -- @IsActive = NULL would otherwise reach the final INSERT/UPDATE
-    -- and throw a raw constraint-violation error instead of behaving
-    -- sensibly. Coalesce to the parameter's own declared default (1)
-    -- rather than rejecting outright -- unlike @Approve on
-    -- sp_ApproveTransaction, this isn't a consequential enough
-    -- ambiguity to refuse the whole request over.
+-- NULL @IsActive coalesces to the declared default (1) instead of hitting a raw constraint error. Integrity.
     SET @IsActive = ISNULL(@IsActive, 1);
 
-    -- ------------------------------------------------------------
-    -- Component: scope check -- this proc only ever creates or
-    -- edits Bank Officer records, never Manager or DBA records
-    -- ------------------------------------------------------------
+-- Confirms the target record is a Bank Officer, not another Manager or DBA. Integrity.
     IF @Position IS NULL OR @Position <> 'Bank Officer'
     BEGIN
         SET @Message = 'sp_ManageStaff can only create or update Bank Officer records.';
@@ -2431,12 +1604,7 @@ BEGIN
         RETURN;
     END
 
-    -- ------------------------------------------------------------
-    -- Component: input validation -- same checks the table's own
-    -- CHECK constraints would eventually enforce, caught here first
-    -- for a clean @Success=0/@Message response instead of a raw
-    -- constraint-violation error
-    -- ------------------------------------------------------------
+-- Validates required fields before they'd otherwise hit the table's own constraints. Integrity.
     IF @StaffName IS NULL OR LTRIM(RTRIM(@StaffName)) = ''
        OR @Branch IS NULL OR LTRIM(RTRIM(@Branch)) = ''
        OR @Phone IS NULL OR LTRIM(RTRIM(@Phone)) = ''
@@ -2457,31 +1625,13 @@ BEGIN
 
     IF @StaffID IS NULL
     BEGIN
-        -- ----------------------------------------------------------
-        -- Component: CREATE path
-        -- ----------------------------------------------------------
+-- CREATE path.
         INSERT INTO dbo.Staff (StaffName, Position, Branch, Phone, Salary, IsActive)
         VALUES (@StaffName, @Position, @Branch, @Phone, @Salary, @IsActive);
 
         DECLARE @NewStaffID INT = SCOPE_IDENTITY();
 
-        -- ------------------------------------------------------------
-        -- Component: provision a UserLogin so this staff member can
-        -- actually log in -- a Staff row with no matching UserLogin
-        -- row is a dead end, since nobody could ever call sp_Login
-        -- as them. Username follows the same 'staff_' + name pattern
-        -- already used by the baseline seed data, with the new
-        -- StaffID appended if that exact username is already taken.
-        -- A random temporary password is generated and hashed
-        -- exactly like sp_ChangePassword does, and handed back ONCE
-        -- in @Message -- it is never stored anywhere in plaintext.
-        -- PasswordLastChanged is deliberately backdated past the
-        -- expiry window, so the temp password can only ever be used
-        -- to trigger sp_Login's existing "password expired" path --
-        -- it forces an immediate sp_ChangePassword rather than
-        -- letting anyone actually operate under the handed-out temp
-        -- password.
-        -- ------------------------------------------------------------
+-- Auto-provisions a UserLogin (temp password, forced expiry) so the new Officer can actually log in. Confidentiality + Integrity.
         DECLARE @BaseUsername NVARCHAR(50) = 'staff_' + LOWER(REPLACE(@StaffName, ' ', ''));
         DECLARE @NewUsername NVARCHAR(50) = @BaseUsername;
         IF EXISTS (SELECT 1 FROM dbo.UserLogin WHERE Username = @NewUsername)
@@ -2508,10 +1658,7 @@ BEGIN
     END
     ELSE
     BEGIN
-        -- ----------------------------------------------------------
-        -- Component: UPDATE path -- scope check against the
-        -- EXISTING row's Position before allowing any change
-        -- ----------------------------------------------------------
+-- UPDATE path: re-checks the EXISTING row's Position before allowing any change. Integrity.
         DECLARE @CurrentPosition NVARCHAR(50);
         SELECT @CurrentPosition = Position FROM dbo.Staff WHERE StaffID = @StaffID;
 
@@ -2546,32 +1693,12 @@ BEGIN
 END;
 GO
 
--- ================================================================
--- Component: Layer 1 -- only Bank_Manager can call this at all
--- ================================================================
+-- Layer 1 -- only Bank_Manager can call this at all. Integrity.
 GRANT EXECUTE ON dbo.sp_ManageStaff TO Bank_Manager;
 GO
 
 
--- ================================================================
--- Component: sp_ManageCustomer (Section 2, Requirement 3, part 1)
--- "Only Bank Officers may manage customer accounts."
--- Same upsert pattern as sp_ManageStaff. This is the FIRST place
--- anywhere in the whole system that actually exercises the real
--- CLE encryption path (Part 6, C2) -- every ICNumber in the seed
--- data was only ever encrypted with the temporary placeholder
--- passphrase, then migrated once in C2.4. A customer created
--- through THIS proc gets encrypted with the real symmetric key
--- from the moment they're created.
---
--- Design choice, flagged rather than hidden: ICNumber is NOT
--- editable through the UPDATE path -- same reasoning as Position
--- being excluded from sp_ManageStaff. A customer's IC number is an
--- identity anchor, not a contact detail; changing it is a
--- re-verification event that deserves its own dedicated, more
--- tightly-scoped mechanism, not a side effect of "update the
--- phone number."
--- ================================================================
+-- sp_ManageCustomer: Officer creates/updates Customer records; first real use of CLE encryption; ICNumber isn't editable here. Confidentiality + Integrity.
 CREATE OR ALTER PROCEDURE dbo.sp_ManageCustomer
     @CustomerID    INT           = NULL,
     @CustomerName  NVARCHAR(100),
@@ -2592,9 +1719,7 @@ BEGIN
     -- as sp_ManageStaff's equivalent coalesce
     SET @IsActive = ISNULL(@IsActive, 1);
 
-    -- ------------------------------------------------------------
-    -- Component: input validation shared by both CREATE and UPDATE
-    -- ------------------------------------------------------------
+-- Input validation shared by both CREATE and UPDATE.
     IF @CustomerName IS NULL OR LTRIM(RTRIM(@CustomerName)) = ''
        OR @Phone IS NULL OR LTRIM(RTRIM(@Phone)) = ''
        OR @Address IS NULL OR LTRIM(RTRIM(@Address)) = ''
@@ -2607,9 +1732,7 @@ BEGIN
 
     IF @CustomerID IS NULL
     BEGIN
-        -- ----------------------------------------------------------
-        -- Component: CREATE path
-        -- ----------------------------------------------------------
+-- CREATE path.
         IF @ICNumber IS NULL OR LEN(@ICNumber) <> 12 OR @ICNumber LIKE '%[^0-9]%'
         BEGIN
             SET @Message = 'ICNumber is required and must be exactly 12 digits.';
@@ -2628,10 +1751,7 @@ BEGIN
             RETURN;
         END
 
-        -- ------------------------------------------------------------
-        -- Component: real CLE encryption (not the seed data's
-        -- placeholder passphrase) -- see header note
-        -- ------------------------------------------------------------
+-- Encrypts the new IC number with the real CLE key, not the seed data's placeholder. Confidentiality.
         OPEN SYMMETRIC KEY CLE_ICNumber_SymKey
             DECRYPTION BY CERTIFICATE CLE_ICNumber_Cert;
 
@@ -2647,12 +1767,7 @@ BEGIN
 
         DECLARE @NewCustID INT = SCOPE_IDENTITY();
 
-        -- ------------------------------------------------------------
-        -- Component: provision a UserLogin, same reasoning and same
-        -- pattern as sp_ManageStaff -- see that procedure's comment
-        -- for the full explanation of the temp-password/forced-
-        -- expiry mechanism.
-        -- ------------------------------------------------------------
+-- Auto-provisions a UserLogin, same temp-password pattern as sp_ManageStaff. Confidentiality + Integrity.
         DECLARE @BaseCustUsername NVARCHAR(50) = 'cust_' + LOWER(REPLACE(@CustomerName, ' ', ''));
         DECLARE @NewCustUsername NVARCHAR(50) = @BaseCustUsername;
         IF EXISTS (SELECT 1 FROM dbo.UserLogin WHERE Username = @NewCustUsername)
@@ -2679,9 +1794,7 @@ BEGIN
     END
     ELSE
     BEGIN
-        -- ----------------------------------------------------------
-        -- Component: UPDATE path
-        -- ----------------------------------------------------------
+-- UPDATE path.
         IF NOT EXISTS (SELECT 1 FROM dbo.Customer WHERE CustomerID = @CustomerID)
         BEGIN
             SET @Message = 'No customer record found with that CustomerID.';
@@ -2704,30 +1817,12 @@ BEGIN
 END;
 GO
 
--- ================================================================
--- Component: Layer 1 -- only Bank_Officer can call this at all
--- ================================================================
+-- Layer 1 -- only Bank_Officer can call this at all. Integrity.
 GRANT EXECUTE ON dbo.sp_ManageCustomer TO Bank_Officer;
 GO
 
 
--- ================================================================
--- Component: sp_ManageAccount (Section 2, Requirement 3, part 2)
--- "Only Bank Officers may manage customer accounts."
---
--- The one design decision here that actually matters for Integrity:
--- there is NO @Balance parameter on this procedure at all -- not
--- "excluded from the UPDATE clause" like ICNumber/Position, but
--- structurally absent from the signature, so there is no possible
--- way to misuse this proc to set a balance. The only code path
--- anywhere in the system permitted to move Balance is
--- sp_ProcessTransaction (not yet built). If Officers could set
--- balances directly here, the entire transaction ledger becomes
--- decorative -- someone could just SET Balance = 999999 and skip
--- the audit trail that a real deposit/withdrawal produces. New
--- accounts always open at RM0.00 (the table's own DEFAULT);
--- funding an account is a transaction, not an account edit.
--- ================================================================
+-- sp_ManageAccount: Officer creates/updates Account records; has NO @Balance parameter at all -- only sp_ProcessTransaction can move money. Integrity.
 CREATE OR ALTER PROCEDURE dbo.sp_ManageAccount
     @AccountID     INT           = NULL,
     @CustomerID    INT           = NULL,  -- required for CREATE, ignored for UPDATE
@@ -2742,19 +1837,10 @@ BEGIN
     SET @Success = 0;
     DECLARE @Who NVARCHAR(150) = dbo.fn_GetSessionUsername();
 
-    -- Account.IsActive is NOT NULL -- same reasoning and same fix
-    -- as sp_ManageStaff/sp_ManageCustomer's equivalent coalesce.
-    -- Also matters here specifically because @IsActive feeds the
-    -- "can't close with non-zero balance" check below -- a NULL
-    -- value would have skipped that safeguard entirely (IF @IsActive
-    -- = 0 evaluates to UNKNOWN, not TRUE, when @IsActive is NULL)
-    -- and then failed anyway with a raw constraint error on the
-    -- UPDATE further down.
+-- NULL @IsActive coalesces to the declared default (1); also protects the 'no closing with a balance' check below. Integrity.
     SET @IsActive = ISNULL(@IsActive, 1);
 
-    -- ------------------------------------------------------------
-    -- Component: input validation shared by both CREATE and UPDATE
-    -- ------------------------------------------------------------
+-- Input validation shared by both CREATE and UPDATE.
     IF @AccountType IS NULL OR @AccountType NOT IN ('Savings', 'Current', 'Fixed Deposit')
     BEGIN
         SET @Message = 'AccountType must be Savings, Current, or Fixed Deposit.';
@@ -2765,9 +1851,7 @@ BEGIN
 
     IF @AccountID IS NULL
     BEGIN
-        -- ----------------------------------------------------------
-        -- Component: CREATE path
-        -- ----------------------------------------------------------
+-- CREATE path.
         IF @CustomerID IS NULL
         BEGIN
             SET @Message = 'CustomerID is required to open a new account.';
@@ -2803,9 +1887,7 @@ BEGIN
     END
     ELSE
     BEGIN
-        -- ----------------------------------------------------------
-        -- Component: UPDATE path
-        -- ----------------------------------------------------------
+-- UPDATE path.
         DECLARE @CurrentBalance DECIMAL(15,2);
         SELECT @CurrentBalance = Balance FROM dbo.Account WHERE AccountID = @AccountID;
 
@@ -2817,13 +1899,7 @@ BEGIN
             RETURN;
         END
 
-        -- ------------------------------------------------------------
-        -- Component: can't close an account still holding money --
-        -- a real integrity safeguard, not just a formality: without
-        -- this, closing an account would silently strand whatever
-        -- balance it held with no transaction record explaining
-        -- where the money went
-        -- ------------------------------------------------------------
+-- Refuses to close an account that still holds a non-zero balance. Integrity.
         IF @IsActive = 0 AND @CurrentBalance <> 0
         BEGIN
             SET @Message = 'Cannot close an account with a non-zero balance. Withdraw or transfer the remaining funds first.';
@@ -2835,10 +1911,7 @@ BEGIN
         UPDATE dbo.Account
         SET AccountType = @AccountType,
             IsActive     = @IsActive
-            -- CustomerID and Balance intentionally NOT included --
-            -- see header note on Balance; CustomerID (reassigning
-            -- an account to a different owner) gets the same
-            -- treatment as ICNumber/Position for the same reason
+-- CustomerID and Balance are intentionally excluded from the UPDATE -- ownership reassignment and balance changes both need their own dedicated path. Integrity.
         WHERE AccountID = @AccountID;
 
         SET @Success = 1;
@@ -2847,32 +1920,12 @@ BEGIN
 END;
 GO
 
--- ================================================================
--- Component: Layer 1 -- only Bank_Officer can call this at all
--- ================================================================
+-- Layer 1 -- only Bank_Officer can call this at all. Integrity.
 GRANT EXECUTE ON dbo.sp_ManageAccount TO Bank_Officer;
 GO
 
 
--- ================================================================
--- Component: sp_UpdateOwnStaffRecord (Section 2, Requirement 4)
--- "Each staff can update their own record except salary."
---
--- Critical design point: there is NO @StaffID parameter. The row
--- being updated is read directly from SESSION_CONTEXT('StaffID'),
--- the same way vw_StaffOwnRecord's RLS filter already works -- not
--- passed in by the caller. If it were a parameter, any staff
--- member could pass someone ELSE's StaffID and edit their record
--- instead of their own, which defeats the entire point of "own
--- record only."
---
--- Scope is Phone only, not Branch/Position/Salary. Salary is
--- explicitly excluded by the requirement itself; Branch and
--- Position are structural/HR changes that belong under
--- sp_ManageStaff (Manager-driven), not self-service -- same
--- "routine edit vs. structural change" split already applied to
--- Position on sp_ManageStaff and ICNumber on sp_ManageCustomer.
--- ================================================================
+-- sp_UpdateOwnStaffRecord: any staff updates their OWN phone only (no @StaffID parameter, so nobody can target someone else's row). Integrity.
 CREATE OR ALTER PROCEDURE dbo.sp_UpdateOwnStaffRecord
     @Phone      NVARCHAR(20),
     @Success    BIT OUTPUT,
@@ -2910,44 +1963,12 @@ BEGIN
 END;
 GO
 
--- ================================================================
--- Component: Layer 1 -- every staff role, not customers. "Each
--- staff" in the requirement includes DBA -- this is the first
--- proc anywhere in the file that grants DBA a data WRITE, but it's
--- scoped to exactly one column of exactly their own row, which is
--- consistent with Section 1's "DBA may view only their own record."
--- ================================================================
+-- Granted to DBA/Manager/Officer -- 'each staff' includes DBA, scoped to one column of their own row only. Confidentiality + Integrity.
 GRANT EXECUTE ON dbo.sp_UpdateOwnStaffRecord TO DBA, Bank_Manager, Bank_Officer;
 GO
 
 
--- ================================================================
--- Component: sp_ProcessTransaction (Section 2, Requirement 5)
--- "Only Customers may perform transactions. Valid transactions are
--- deposit, withdrawal, and transfer."
---
--- Two things worth calling out explicitly before the code:
---
--- 1. No @CustomerID parameter, same reasoning as
--- sp_UpdateOwnStaffRecord -- the acting customer comes from
--- SESSION_CONTEXT('CustomerID'), never from a parameter a caller
--- could set to someone else's ID. On top of that, the SOURCE
--- ACCOUNT is explicitly checked to belong to that customer before
--- anything happens -- this is the actual integrity boundary that
--- makes vw_AccountOwn's "customers see only their own accounts"
--- promise from Section 1 mean something when it comes to WRITES,
--- not just reads.
---
--- 2. The RM10,000 approval threshold and PendingApproval routing
--- below is NOT a rubric requirement -- Requirement 5 only says
--- "deposit, withdrawal, and transfer." This is your own team's
--- design extension, already baked into the baseline schema
--- (PendingApproval table, the seeded pending row, and the seed
--- comment that explicitly anticipated this proc existing). Kept
--- for consistency with what's already built, but flagged here so
--- it's clear this is beyond the bare spec, same as I flagged with
--- ICNumber/Position/Balance exclusions elsewhere.
--- ================================================================
+-- sp_ProcessTransaction: Customer deposits/withdraws/transfers on their OWN accounts; amounts over RM10,000 route to approval (team's own extension, not a rubric requirement). Integrity.
 CREATE OR ALTER PROCEDURE dbo.sp_ProcessTransaction
     @AccountID        INT,
     @TransactionType  NVARCHAR(20),
@@ -2964,16 +1985,11 @@ BEGIN
     DECLARE @CallerCustomerID INT = TRY_CAST(SESSION_CONTEXT(N'CustomerID') AS INT);
     DECLARE @ApprovalThreshold DECIMAL(15,2) = 10000.00;
 
-    -- Defensive: ToAccountID only ever means anything for a
-    -- Transfer -- silently drop it otherwise rather than let a
-    -- mistaken value reach the table's own CHECK constraint as a
-    -- raw, unexplained error
+-- Silently clears ToAccountID for non-Transfer types instead of hitting a raw constraint error.
     IF @TransactionType <> 'Transfer'
         SET @ToAccountID = NULL;
 
-    -- ------------------------------------------------------------
-    -- Component: caller must be a logged-in customer
-    -- ------------------------------------------------------------
+-- Caller must be a logged-in customer.
     IF @CallerCustomerID IS NULL
     BEGIN
         SET @Message = 'You must be logged in as a customer to perform transactions.';
@@ -2982,9 +1998,7 @@ BEGIN
         RETURN;
     END
 
-    -- ------------------------------------------------------------
-    -- Component: basic input validation
-    -- ------------------------------------------------------------
+-- Basic input validation.
     IF @TransactionType IS NULL OR @TransactionType NOT IN ('Deposit', 'Withdrawal', 'Transfer')
     BEGIN
         SET @Message = 'TransactionType must be Deposit, Withdrawal, or Transfer.';
@@ -3001,11 +2015,7 @@ BEGIN
         RETURN;
     END
 
-    -- ------------------------------------------------------------
-    -- Component: ownership check -- the actual Integrity boundary.
-    -- This is the check that makes "only your own accounts" real
-    -- for writes.
-    -- ------------------------------------------------------------
+-- Confirms the source account actually belongs to the calling customer -- the real Integrity boundary for writes. Integrity.
     DECLARE @AccountOwnerID INT, @AccountActive BIT, @CurrentBalance DECIMAL(15,2);
     SELECT @AccountOwnerID = CustomerID, @AccountActive = IsActive, @CurrentBalance = Balance
     FROM dbo.Account WHERE AccountID = @AccountID;
@@ -3034,9 +2044,7 @@ BEGIN
         RETURN;
     END
 
-    -- ------------------------------------------------------------
-    -- Component: Transfer-specific validation
-    -- ------------------------------------------------------------
+-- Transfer-specific validation.
     IF @TransactionType = 'Transfer'
     BEGIN
         IF @ToAccountID IS NULL
@@ -3075,12 +2083,7 @@ BEGIN
         END
     END
 
-    -- ------------------------------------------------------------
-    -- Component: sufficient-funds check (Withdrawal/Transfer only)
-    -- Checked BEFORE the approval-threshold routing below -- no
-    -- point routing a transaction for Manager approval if the
-    -- customer doesn't even have the money for it
-    -- ------------------------------------------------------------
+-- Checks sufficient funds before checking the approval threshold. Integrity.
     IF @TransactionType IN ('Withdrawal', 'Transfer') AND @CurrentBalance < @Amount
     BEGIN
         SET @Message = 'Insufficient balance for this transaction.';
@@ -3089,10 +2092,7 @@ BEGIN
         RETURN;
     END
 
-    -- ------------------------------------------------------------
-    -- Component: large-amount routing (team's own extension --
-    -- see header note)
-    -- ------------------------------------------------------------
+-- Routes amounts over RM10,000 to PendingApproval instead of posting directly.
     IF @Amount > @ApprovalThreshold
     BEGIN
         DECLARE @CallerUsername NVARCHAR(50);
@@ -3106,10 +2106,7 @@ BEGIN
         RETURN;
     END
 
-    -- ------------------------------------------------------------
-    -- Component: the actual transaction -- wrapped for atomicity,
-    -- especially the two-account UPDATE for a Transfer
-    -- ------------------------------------------------------------
+-- Executes the Deposit/Withdrawal/Transfer, wrapped in a transaction for atomicity. Integrity.
     BEGIN TRY
         BEGIN TRANSACTION;
 
@@ -3144,26 +2141,12 @@ BEGIN
 END;
 GO
 
--- ================================================================
--- Component: Layer 1 -- Customer only
--- ================================================================
+-- Layer 1 -- Customer only. Integrity.
 GRANT EXECUTE ON dbo.sp_ProcessTransaction TO Customer;
 GO
 
 
--- ================================================================
--- Component: sp_ApproveTransaction (closes the loop on
--- sp_ProcessTransaction's PendingApproval routing -- without this,
--- a request over RM10,000 goes in and sits there forever with no
--- way to ever resolve it)
---
--- Re-validates everything before actually moving money on approval
--- -- time has passed since the request was submitted, so the
--- source account's balance or active status may have changed. If
--- re-validation fails, the request is left as 'Pending' rather
--- than auto-rejected, so a Manager can retry later once conditions
--- change, instead of the customer having to resubmit from scratch.
--- ================================================================
+-- sp_ApproveTransaction: Manager approves/rejects a pending request, re-validating funds/status before moving money. Integrity.
 CREATE OR ALTER PROCEDURE dbo.sp_ApproveTransaction
     @RequestID  INT,
     @Approve    BIT,           -- 1 = approve and execute, 0 = reject
@@ -3185,16 +2168,7 @@ BEGIN
         RETURN;
     END
 
-    -- ------------------------------------------------------------
-    -- Component: @Approve must be explicit -- BIT parameters can
-    -- still be passed as NULL. Without this check, "IF @Approve = 0"
-    -- evaluates to UNKNOWN (not TRUE) when @Approve is NULL, so
-    -- execution would silently fall through past the reject branch
-    -- and into the approve/execute path below -- treating an
-    -- unspecified value as "approve" for a real money-moving
-    -- action. Too consequential to guess at, so this is a hard
-    -- reject, not a default.
-    -- ------------------------------------------------------------
+-- Rejects a NULL @Approve outright -- too consequential to silently treat as 'approve'. Integrity.
     IF @Approve IS NULL
     BEGIN
         SET @Message = 'Approve must be explicitly 1 (approve) or 0 (reject).';
@@ -3206,9 +2180,7 @@ BEGIN
     DECLARE @ApproverUsername NVARCHAR(50);
     SELECT @ApproverUsername = Username FROM dbo.UserLogin WHERE StaffID = @CallerStaffID;
 
-    -- ------------------------------------------------------------
-    -- Component: look up the pending request
-    -- ------------------------------------------------------------
+-- Looks up the pending request.
     DECLARE @ReqAccountID INT, @ReqAmount DECIMAL(15,2), @ReqType NVARCHAR(20),
             @ReqToAccountID INT, @ReqStatus NVARCHAR(10);
     SELECT @ReqAccountID = AccountID, @ReqAmount = Amount, @ReqType = TransactionType,
@@ -3231,11 +2203,7 @@ BEGIN
         RETURN;
     END
 
-    -- ------------------------------------------------------------
-    -- Component: reject path -- no money moves, just close out the
-    -- request. The trigger on PendingApproval logs this Status/
-    -- ApprovedBy/ApprovalDate change automatically.
-    -- ------------------------------------------------------------
+-- Reject path: closes the request, no money moves. Integrity.
     IF @Approve = 0
     BEGIN
         UPDATE dbo.PendingApproval
@@ -3247,9 +2215,7 @@ BEGIN
         RETURN;
     END
 
-    -- ------------------------------------------------------------
-    -- Component: approve path -- re-validate before moving money
-    -- ------------------------------------------------------------
+-- Approve path -- re-validates before moving money. Integrity.
     DECLARE @CurrentSourceBalance DECIMAL(15,2), @SourceActive BIT;
     SELECT @CurrentSourceBalance = Balance, @SourceActive = IsActive FROM dbo.Account WHERE AccountID = @ReqAccountID;
 
@@ -3283,11 +2249,7 @@ BEGIN
         END
     END
 
-    -- ------------------------------------------------------------
-    -- Component: actually execute the transaction -- same
-    -- Deposit/Withdrawal/Transfer logic as sp_ProcessTransaction's
-    -- own execution block, wrapped for atomicity
-    -- ------------------------------------------------------------
+-- Approve path: same Deposit/Withdrawal/Transfer execution as sp_ProcessTransaction, wrapped for atomicity. Integrity.
     BEGIN TRY
         BEGIN TRANSACTION;
 
@@ -3326,54 +2288,17 @@ BEGIN
 END;
 GO
 
--- ================================================================
--- Component: Layer 1 -- Bank_Manager only, matching
--- vw_PendingApprovalAll's existing grant scope
--- ================================================================
+-- Granted to Bank_Manager only, matching vw_PendingApprovalAll's read scope. Integrity.
 GRANT EXECUTE ON dbo.sp_ApproveTransaction TO Bank_Manager;
 GO
 
 
--- ================================================================
--- ## PART 9 -- AVAILABILITY: RECOVERY PROCEDURES (Section 3, Requirement 1)
--- "Any accidental or unauthorized data modifications or deletions
--- must be recoverable efficiently."
---
--- The 4 core business tables (Staff, Customer, Account,
--- TransactionRecord) have had SYSTEM_VERSIONING = ON since the
--- baseline (Part 0) -- that infrastructure has existed the whole
--- time but was only ever used passively, via the DBA-accessible
--- _History views. This part is what actually USES it: one recovery
--- procedure per table, granted to RecoveryAdmin (with DBA nested
--- as a member -- see Task #3), each handling two distinct
--- scenarios automatically:
---
---   Scenario A -- row still exists but was wrongly modified:
---   pull its state as of a given point in time from the history
---   table, UPDATE the live row back to those values.
---
---   Scenario B -- row was deleted entirely: the live table has
---   nothing to UPDATE, so the historical state gets INSERTed back
---   with SET IDENTITY_INSERT ON, preserving the ORIGINAL ID -- not
---   a new one, otherwise every foreign key pointing at that row
---   (e.g. UserLogin.StaffID) stays broken even after "recovery."
---
--- Scope note, flagged rather than assumed: PendingApproval,
--- UserLogin, and SecurityConfig were never given SYSTEM_VERSIONING
--- -- only these 4 tables were. Recovering those 3 would mean
--- parsing AuditSchema.AuditLog's Activity text strings back into
--- structured data, which is fragile and not what temporal tables
--- are built for. This covers the 4 tables where the real
--- money/identity risk actually lives; the other 3 are a known,
--- accepted gap, not a silently ignored one.
--- ################################################################
+-- PART 9: recovery procedures for the 4 temporal tables -- restore a wrongly-changed row, or reinsert a deleted one with its original ID. Availability.
 
 USE SmartBankDB;
 GO
 
--- ================================================================
--- Component: sp_RecoverStaff
--- ================================================================
+-- sp_RecoverStaff. Availability.
 CREATE OR ALTER PROCEDURE dbo.sp_RecoverStaff
     @StaffID        INT,
     @AsOfDateTime   DATETIME2,
@@ -3451,12 +2376,7 @@ GRANT EXECUTE ON dbo.sp_RecoverStaff TO RecoveryAdmin;
 GO
 
 
--- ================================================================
--- Component: sp_RecoverCustomer
--- (ICNumber/ICNumberHash restore as their original encrypted/
--- hashed binary values -- the history table already stores them
--- that way, no re-encryption needed)
--- ================================================================
+-- sp_RecoverCustomer: restores Customer rows; ICNumber restores as its original encrypted bytes, no re-encryption needed. Confidentiality + Availability.
 CREATE OR ALTER PROCEDURE dbo.sp_RecoverCustomer
     @CustomerID     INT,
     @AsOfDateTime   DATETIME2,
@@ -3532,9 +2452,7 @@ GRANT EXECUTE ON dbo.sp_RecoverCustomer TO RecoveryAdmin;
 GO
 
 
--- ================================================================
--- Component: sp_RecoverAccount
--- ================================================================
+-- sp_RecoverAccount. Availability.
 CREATE OR ALTER PROCEDURE dbo.sp_RecoverAccount
     @AccountID      INT,
     @AsOfDateTime   DATETIME2,
@@ -3609,15 +2527,7 @@ GRANT EXECUTE ON dbo.sp_RecoverAccount TO RecoveryAdmin;
 GO
 
 
--- ================================================================
--- Component: sp_RecoverTransactionRecord
--- (In practice, this table is insert-only through every legitimate
--- proc in the system -- sp_ProcessTransaction and
--- sp_ApproveTransaction only ever INSERT into it, never UPDATE or
--- DELETE. A row actually needing recovery here could only happen
--- via someone bypassing the application layer entirely -- exactly
--- the "unauthorized modification" scenario this requirement names.)
--- ================================================================
+-- sp_RecoverTransactionRecord: restores TransactionRecord rows; since this table is insert-only in practice, ever needing this implies someone bypassed the app layer. Availability.
 CREATE OR ALTER PROCEDURE dbo.sp_RecoverTransactionRecord
     @TransID        INT,
     @AsOfDateTime   DATETIME2,
@@ -3693,54 +2603,12 @@ GRANT EXECUTE ON dbo.sp_RecoverTransactionRecord TO RecoveryAdmin;
 GO
 
 
--- ================================================================
--- ## PART 10 -- AVAILABILITY: BACKUP AUTOMATION (Section 3,
--- Requirements 2 & 3)
---
--- RPO (Requirement 2): defined as 5 minutes, tied directly to the
--- Log backup interval below -- not a number floating separately
--- from the implementation. Justification: SmartBankDB is a live
--- banking transaction system; 5 minutes is the maximum data that
--- could ever be lost in a worst-case failure between log backups.
---
--- Schedule (Requirement 3): Full every 6 hours, Differential every
--- 1 hour, Log every 5 minutes. Full is the expensive infrequent
--- baseline; Differential sits in the middle with a genuinely large
--- window (up to ~6 hours of changes) since the last Full, making
--- it actually worth having as a restore-speed shortcut; Log is the
--- frequent lightweight one that delivers the 5-minute RPO. A
--- restore in the worst case is: latest Full -> latest Differential
--- -> at most ~55 minutes of Log backups to reach the exact point
--- of failure.
---
--- Encryption: closes "Weakness 5 (plaintext data / unprotected
--- backups)" for real. TDE (Part 6) only ever protected the
--- database files on disk -- a .bak file copied off the server was
--- still plain, unencrypted data, which would have defeated the
--- entire point of TDE the moment anyone got hold of a backup file
--- instead of the live database. Every backup below is encrypted
--- with its own dedicated certificate, separate from the CLE/TDE
--- ones already built.
---
--- BEFORE RUNNING: create these three folders on the SQL Server
--- host, and grant the SQL Server service account Modify permission
--- on each (same steps already used for C:\SQLAudit\ and
--- C:\SQLKeys\ in earlier parts):
---   C:\SQLBackups\Full\
---   C:\SQLBackups\Differential\
---   C:\SQLBackups\Log\
--- ################################################################
+-- PART 10: automated Full/Differential/Log backups (6h/1h/5min); RPO = 5 minutes, tied to the Log interval; every backup encrypted. Availability.
 
 USE master;
 GO
 
--- ================================================================
--- [B1] Backup encryption certificate -- reuses the master DMK
--- already created for TDE (Part 6, C2.6), since a database can
--- only have one. Lives in master, same reasoning as the TDE
--- certificate: it has to be available at restore time regardless
--- of which database is being restored.
--- ================================================================
+-- [B1] Certificate encrypting every backup -- closes the 'unprotected backups' gap TDE alone didn't cover. Availability.
 IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMasterKey##')
     CREATE MASTER KEY ENCRYPTION BY PASSWORD = 'SmartBank_MasterDMK_P@ss2026!';
 GO
@@ -3750,31 +2618,11 @@ IF NOT EXISTS (SELECT 1 FROM sys.certificates WHERE name = 'BackupEncryptCert')
         WITH SUBJECT = 'Certificate for SmartBankDB backup encryption';
 GO
 
--- ================================================================
--- [B2] Switch to FULL recovery model -- required for transaction
--- log backups to mean anything. Under SIMPLE recovery (SQL
--- Server's default), the log is truncated automatically on
--- checkpoint and BACKUP LOG isn't meaningful.
--- ================================================================
+-- [B2] Switches to FULL recovery model so transaction log backups are meaningful. Availability.
 ALTER DATABASE SmartBankDB SET RECOVERY FULL;
 GO
 
--- ================================================================
--- [B3] Component: sp_PerformFullBackup / sp_PerformDifferentialBackup
--- / sp_PerformLogBackup
--- Each builds a timestamped filename via dynamic SQL (BACKUP
--- DATABASE doesn't accept a variable/expression directly in its
--- static syntax) so repeated runs never overwrite each other, and
--- each is called directly by its SQL Server Agent job step below
--- rather than embedding raw dynamic SQL in the job itself --
--- keeps the actual backup logic in one testable place.
---
--- These are infrastructure procedures, not part of the RBAC-gated
--- application layer -- deliberately no GRANT EXECUTE to any of the
--- 4 roles (DBA/Manager/Officer/Customer). Only the SQL Server
--- Agent service account (or a sysadmin running these directly)
--- ever calls them.
--- ================================================================
+-- [B3] sp_PerformFullBackup / sp_PerformDifferentialBackup / sp_PerformLogBackup: build a timestamped filename and run the encrypted backup. Availability.
 USE SmartBankDB;
 GO
 
@@ -3835,12 +2683,7 @@ BEGIN
 END;
 GO
 
--- ================================================================
--- [B4] Initial Full backup -- required to actually start the log
--- chain after switching recovery models above. Log backups won't
--- work meaningfully until at least one Full backup has run since
--- the switch to FULL recovery.
--- ================================================================
+-- [B4] Runs one Full backup immediately to start the log chain. Availability.
 EXEC dbo.sp_PerformFullBackup;
 GO
 
@@ -3848,20 +2691,7 @@ PRINT 'B4 -- initial Full backup complete, log chain started.';
 GO
 
 
--- ================================================================
--- [B5] SQL Server Agent Jobs -- this is what "automated" actually
--- means. Three T-SQL BACKUP statements sitting in a script that
--- someone has to remember to run manually are backups, not
--- automated backups. Each job below: create the job, add one step
--- that calls the matching sp_Perform*Backup proc, create and
--- attach a recurring schedule, then register it against the local
--- server (a job with no jobserver assigned never actually runs --
--- this step is easy to forget and silently leaves the whole job
--- inert).
---
--- freq_subday_type values used below: 8 = hours, 4 = minutes.
--- Requires SQL Server Agent to be running on the host.
--- ================================================================
+-- [B5] SQL Server Agent Jobs -- the actual 'automated' part; schedules the 3 backup procs to run on their own. Availability.
 USE msdb;
 GO
 
@@ -3967,15 +2797,10 @@ BEGIN
 END
 GO
 
-USE SmartBankDB;
+USE master;
 GO
 
--- ================================================================
--- [B6] Backup the encryption certificate itself, WITH PRIVATE KEY
--- -- same reasoning as every other key/cert backed up in this file:
--- losing this certificate makes every encrypted backup ever taken
--- permanently unreadable, forever, with no recovery path.
--- ================================================================
+-- [B6] Backs up the backup-encryption certificate itself -- losing it makes every encrypted backup permanently unreadable. Availability. (Runs against master, where BackupEncryptCert actually lives -- BACKUP CERTIFICATE looks it up in whichever database is currently active, unlike BACKUP DATABASE's ENCRYPTION clause.)
 BACKUP CERTIFICATE BackupEncryptCert
     TO FILE = 'C:\SQLKeys\BackupEncryptCert.cer'
     WITH PRIVATE KEY (
@@ -3985,37 +2810,4 @@ BACKUP CERTIFICATE BackupEncryptCert
 GO
 
 PRINT 'Part 10 (Backup Automation) setup complete -- 3 jobs registered: Full (6h), Differential (1h), Log (5min).';
-GO
-
-
--- ================================================================
--- called directly -- Full already ran once in [B4], run the other two now
-EXEC dbo.sp_PerformDifferentialBackup;
-EXEC dbo.sp_PerformLogBackup;
-PRINT 'Differential and Log backups completed.';
-
--- TEST 5: confirm all 3 backup types are recorded in backup history
-SELECT database_name, type, backup_start_date, backup_finish_date
-FROM msdb.dbo.backupset
-WHERE database_name = 'SmartBankDB'
-ORDER BY backup_start_date DESC;
--- Expected: at least 3 rows -- type = 'D' (Database/Full),
--- 'I' (Differential), 'L' (Log)
-
--- TEST 6: confirm a backup file is actually encrypted (inspect the
--- most recent Full backup's header). MANUAL STEP -- physical_device_name
--- can't be substituted into RESTORE HEADERONLY as a variable, so
--- run the SELECT first, copy the exact path it returns, then paste
--- it into the RESTORE HEADERONLY statement below.
-SELECT TOP 1 physical_device_name
-FROM msdb.dbo.backupmediafamily bmf
-JOIN msdb.dbo.backupset bs ON bmf.media_set_id = bs.media_set_id
-WHERE bs.database_name = 'SmartBankDB' AND bs.type = 'D'
-ORDER BY bs.backup_start_date DESC;
--- Copy the path this returns, then run:
---     RESTORE HEADERONLY FROM DISK = '<paste path here>';
--- Expected: KeyAlgorithm/EncryptorThumbprint columns populated
--- (non-NULL) -- an unencrypted backup would show these as NULL
-
-PRINT 'Part 10 (Backup Automation) test suite complete.';
 GO
