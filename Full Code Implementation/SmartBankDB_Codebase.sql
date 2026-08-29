@@ -1,7 +1,7 @@
 ﻿-- SmartBankDB Codebase: schema, roles, views, procedures, triggers, backup automation. Covers Confidentiality + Integrity + Availability. Seed data and tests live in FeatureTests.sql; demo script in DemoWalkthrough.sql. BEFORE RUNNING: create C:\SQLAudit\, C:\SQLKeys\, C:\SQLBackups\Full\, C:\SQLBackups\Differential\, C:\SQLBackups\Log\ with service-account write access; SQL Server Agent must be running.
 
 
--- Parts: 0 Baseline | 1 Authentication | 2 RBAC | 3 Views | 4 Row-Level Security | 5 Native Audit (C) | 6 Encryption (C) | 7 DML Audit Triggers (I) | 8 Write Procedures (I) | 9 Recovery (A) | 10 Backup Automation (A).
+-- Parts: 0 Baseline | 1 Authentication/Hashing | 2 RBAC | 3 Views/DDM | 4 Row Filtering | 5 Native + Login Audit | 6 Encryption | 6B Static Masking/Anonymisation | 7 DML Audit Triggers | 8 Write Procedures | 9 Recovery | 10 Backup Automation.
 -- RecoveryAdmin (Part 2): 5th role holding recovery/history access, DBA nested as member -- keeps DBA's own grants matching the rubric literally. Integrity + Availability.
 
 
@@ -131,6 +131,12 @@ ALTER TABLE dbo.Customer
 ALTER COLUMN Address ADD MASKED WITH (FUNCTION = 'default()');
 GO
 
+-- C1: Account balances are masked by default. Managers and customers receive
+-- narrowly scoped UNMASK rights later, after the database roles exist.
+ALTER TABLE dbo.Account
+ALTER COLUMN Balance ADD MASKED WITH (FUNCTION = 'default()');
+GO
+
 -- UserLogin table.
 CREATE TABLE UserLogin (
     LoginID      INT            NOT NULL IDENTITY(1,1) PRIMARY KEY,
@@ -180,9 +186,9 @@ CREATE TABLE AuditSchema.AuditLog (
     LogID      BIGINT IDENTITY(1,1)  NOT NULL PRIMARY KEY,
     TableName  NVARCHAR(128)         NOT NULL,
     ColumnName NVARCHAR(128)         NULL,
-    OldValue   NVARCHAR(MAX)         NULL,
-    NewValue   NVARCHAR(MAX)         NULL,
-    ChangedBy  NVARCHAR(50)          NOT NULL,
+    RecordID   NVARCHAR(50)          NULL,
+    Activity   NVARCHAR(MAX)         NULL,
+    ChangedBy  NVARCHAR(150)         NOT NULL,
     ActionType NVARCHAR(10)          NOT NULL
         CONSTRAINT CHK_ActionType
         CHECK (ActionType IN ('INSERT', 'UPDATE', 'DELETE', 'REJECTED')),
@@ -267,6 +273,65 @@ INSERT INTO dbo.SecurityConfig (ConfigKey, ConfigValue) VALUES
     ('PasswordExpiryDays', 90);    -- Component: Password expiration setting
 GO
 
+-- Audit identity helper is created before every authentication procedure that
+-- references it. Keeping it here makes a clean top-to-bottom deployment valid.
+CREATE OR ALTER FUNCTION dbo.fn_GetSessionUsername()
+RETURNS NVARCHAR(150)
+AS
+BEGIN
+    DECLARE @Username NVARCHAR(50), @Role NVARCHAR(50);
+    DECLARE @StaffID INT = TRY_CAST(SESSION_CONTEXT(N'StaffID') AS INT);
+    DECLARE @CustomerID INT = TRY_CAST(SESSION_CONTEXT(N'CustomerID') AS INT);
+
+    IF @StaffID IS NOT NULL
+        SELECT @Username = ul.Username, @Role = s.Position
+        FROM dbo.UserLogin ul
+        JOIN dbo.Staff s ON s.StaffID = ul.StaffID
+        WHERE ul.StaffID = @StaffID;
+    ELSE IF @CustomerID IS NOT NULL
+        SELECT @Username = Username, @Role = 'Customer'
+        FROM dbo.UserLogin
+        WHERE CustomerID = @CustomerID;
+
+    IF @Username IS NULL RETURN SUSER_NAME();
+    RETURN CONCAT(@Username, ' (', @Role, ')');
+END;
+GO
+
+-- Central password hashing objects retained as the documented C3 control.
+-- The byte order matches the existing compiled format: salt + UTF-16 password.
+CREATE OR ALTER FUNCTION dbo.fn_HashPassword
+(
+    @PlainPassword NVARCHAR(100),
+    @Salt VARBINARY(32)
+)
+RETURNS VARBINARY(64)
+AS
+BEGIN
+    RETURN HASHBYTES('SHA2_512', @Salt + CONVERT(VARBINARY(4000), @PlainPassword));
+END;
+GO
+
+CREATE OR ALTER FUNCTION dbo.fn_VerifyPassword
+(
+    @Username NVARCHAR(50),
+    @SuppliedPassword NVARCHAR(100)
+)
+RETURNS BIT
+AS
+BEGIN
+    DECLARE @StoredHash VARBINARY(64), @StoredSalt VARBINARY(32);
+    SELECT @StoredHash = PasswordHash, @StoredSalt = Salt
+    FROM dbo.UserLogin
+    WHERE Username = @Username AND IsActive = 1;
+
+    RETURN CASE
+        WHEN @StoredHash IS NOT NULL
+         AND dbo.fn_HashPassword(@SuppliedPassword, @StoredSalt) = @StoredHash
+        THEN 1 ELSE 0 END;
+END;
+GO
+
 -- sp_Login: authenticates a user, sets SESSION_CONTEXT identity. Confidentiality.
 CREATE OR ALTER PROCEDURE dbo.sp_Login
     @Username        NVARCHAR(50),
@@ -342,7 +407,7 @@ BEGIN
     END
 
 -- Hashes + salts the typed password (SHA2_512) and compares to the stored hash -- never compares plaintext. Confidentiality.
-    IF HASHBYTES('SHA2_512', @Salt + CONVERT(VARBINARY(4000), @PlainPassword)) = @StoredHash
+    IF dbo.fn_VerifyPassword(@Username, @PlainPassword) = 1
     BEGIN
 -- Correct-but-expired password blocks login and forces a change. Confidentiality.
         IF DATEDIFF(DAY, @PasswordLastChanged, SYSDATETIME()) > @ExpiryDays
@@ -413,6 +478,33 @@ BEGIN
              AND @PlainPassword LIKE '%[^a-zA-Z0-9]%'
         THEN 1 ELSE 0
     END;
+END;
+GO
+
+-- Controlled password set/reset primitive retained for C3 documentation and
+-- provisioning. It is intentionally not granted directly to a business role.
+CREATE OR ALTER PROCEDURE dbo.sp_SetPassword
+    @Username NVARCHAR(50),
+    @NewPassword NVARCHAR(100)
+WITH EXECUTE AS OWNER
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF dbo.fn_ValidatePasswordComplexity(@NewPassword) = 0
+        THROW 51002, 'Password must be at least 8 characters and include uppercase, lowercase, digit, and special characters.', 1;
+
+    DECLARE @NewSalt VARBINARY(32) = CRYPT_GEN_RANDOM(32);
+
+    UPDATE dbo.UserLogin
+    SET Salt = @NewSalt,
+        PasswordHash = dbo.fn_HashPassword(@NewPassword, @NewSalt),
+        PasswordLastChanged = SYSDATETIME(),
+        FailedLoginAttempts = 0,
+        LockoutUntil = NULL
+    WHERE Username = @Username;
+
+    IF @@ROWCOUNT = 0 THROW 51003, 'Username not found.', 1;
 END;
 GO
 
@@ -487,7 +579,7 @@ BEGIN
     END
 
 -- Verifies the old password first. Confidentiality.
-    IF HASHBYTES('SHA2_512', @Salt + CONVERT(VARBINARY(4000), @OldPassword)) <> @StoredHash
+    IF dbo.fn_HashPassword(@OldPassword, @Salt) <> @StoredHash
     BEGIN
         -- Wrong old password -- counts as a failed attempt, same as Task #1
         UPDATE dbo.UserLogin
@@ -507,7 +599,7 @@ BEGIN
     DECLARE @NewSalt VARBINARY(32) = CRYPT_GEN_RANDOM(32);
 
     UPDATE dbo.UserLogin
-    SET PasswordHash         = HASHBYTES('SHA2_512', @NewSalt + CONVERT(VARBINARY(4000), @NewPassword)),
+    SET PasswordHash         = dbo.fn_HashPassword(@NewPassword, @NewSalt),
         Salt                 = @NewSalt,
         PasswordLastChanged  = SYSDATETIME(),
         FailedLoginAttempts  = 0,
@@ -671,6 +763,13 @@ GO
 GRANT SELECT ON dbo.vw_AllBankOfficers TO Bank_Manager;
 GO
 
+-- Salary remains hidden from unrelated roles, while each staff role can see
+-- it only through its already row/role-restricted staff view.
+GRANT UNMASK ON OBJECT::dbo.Staff (Salary) TO DBA;
+GRANT UNMASK ON OBJECT::dbo.Staff (Salary) TO Bank_Manager;
+GRANT UNMASK ON OBJECT::dbo.Staff (Salary) TO Bank_Officer;
+GO
+
 
 -- vw_CustomerAll: full customer row, for Manager/Officer. Confidentiality.
 CREATE OR ALTER VIEW dbo.vw_CustomerAll AS
@@ -692,8 +791,12 @@ GO
 
 -- UNMASK on own record only: RLS above already limits Customer to CustomerID = their own row,
 -- so this only reveals the masked Phone/Address within that one row -- not other customers'. Confidentiality.
-GRANT UNMASK ON dbo.Customer(Phone)   TO Customer;
-GRANT UNMASK ON dbo.Customer(Address) TO Customer;
+GRANT UNMASK ON OBJECT::dbo.Customer (Phone) TO Bank_Manager;
+GRANT UNMASK ON OBJECT::dbo.Customer (Address) TO Bank_Manager;
+GRANT UNMASK ON OBJECT::dbo.Customer (Phone) TO Bank_Officer;
+GRANT UNMASK ON OBJECT::dbo.Customer (Address) TO Bank_Officer;
+GRANT UNMASK ON OBJECT::dbo.Customer (Phone) TO Customer;
+GRANT UNMASK ON OBJECT::dbo.Customer (Address) TO Customer;
 GO
 
 -- Component: vw_AccountAll
@@ -702,6 +805,13 @@ CREATE OR ALTER VIEW dbo.vw_AccountAll AS
     FROM dbo.Account;
 GO
 GRANT SELECT ON dbo.vw_AccountAll TO Bank_Manager, Bank_Officer;
+GO
+
+-- C1 least-privilege UNMASK policy. Manager sees true balances in the all-
+-- account view; a Customer sees true balances only through vw_AccountOwn.
+-- Bank_Officer intentionally receives no UNMASK grant and sees 0.00 instead.
+GRANT UNMASK ON OBJECT::dbo.Account (Balance) TO Bank_Manager;
+GRANT UNMASK ON OBJECT::dbo.Account (Balance) TO Customer;
 GO
 
 -- Component: vw_AccountOwn
@@ -762,8 +872,9 @@ GRANT SELECT ON dbo.vw_PendingApprovalOwn TO Customer;
 GO
 
 
--- Direct GRANT SELECT on AuditLog to DBA/Manager -- not a view, since AuditLog isn't one of the 5 restricted business tables. Confidentiality + Integrity.
-GRANT SELECT ON AuditSchema.AuditLog TO DBA, Bank_Manager;
+-- Audit contents may contain sensitive before/after values, so only DBA can
+-- inspect the custom audit trail. This restores C6's documented access rule.
+GRANT SELECT ON AuditSchema.AuditLog TO DBA;
 GO
 
 -- Component: vw_Staff_History
@@ -985,12 +1096,51 @@ GO
 GRANT EXECUTE ON dbo.sp_DBA_ViewAuditFile TO DBA;
 GO
 
+-- C7: focused login/logout audit reader with every field required by the
+-- documented audit matrix: login, client host, event, outcome, and timestamp.
+CREATE OR ALTER PROCEDURE dbo.sp_DBA_ViewLoginAudit
+AS
+BEGIN
+    SET NOCOUNT ON;
 
--- [C6.7b] Reminder: real DBA logins also need server-level CONTROL SERVER granted individually -- DBA role membership alone isn't enough.
-PRINT 'Reminder: grant CONTROL SERVER individually to each real DBA login � see comment above [C6.7b].';
+    IF IS_MEMBER('DBA') = 0
+        THROW 51004, 'Access denied: login audit records are restricted to the DBA role.', 1;
+
+    SELECT
+        event_time,
+        server_principal_name AS LoginName,
+        client_ip AS ClientHost,
+        CASE action_id
+            WHEN 'LGIS' THEN 'Login Succeeded'
+            WHEN 'LGIF' THEN 'Login Failed'
+            WHEN 'LGO'  THEN 'Logout'
+            ELSE action_id
+        END AS EventType,
+        succeeded AS Succeeded
+    FROM sys.fn_get_audit_file('C:\SQLAudit\*.sqlaudit', DEFAULT, DEFAULT)
+    WHERE action_id IN ('LGIS', 'LGIF', 'LGO')
+    ORDER BY event_time DESC;
+END;
 GO
 
-PRINT 'C6 � SQL Server Audit setup complete. Server audit and all 4 specifications are ON.';
+GRANT EXECUTE ON dbo.sp_DBA_ViewLoginAudit TO DBA;
+GO
+
+-- SQL Server 2022 supports this narrower server permission for reading audit
+-- files; it avoids the original script's excessive CONTROL SERVER grant.
+USE master;
+GO
+GRANT VIEW SERVER SECURITY AUDIT TO SmartBank_DBA;
+GO
+USE SmartBankDB;
+GO
+
+
+-- Additional real DBA logins need VIEW SERVER SECURITY AUDIT during onboarding.
+PRINT 'Reminder: grant VIEW SERVER SECURITY AUDIT to each approved real DBA login.';
+GO
+
+PRINT 'C6 - SQL Server Audit setup complete. Server audit and all 4 specifications are ON.';
 
 -- PART 6: TDE (whole-database encryption) + CLE (Customer.ICNumber column encryption). Confidentiality. Passwords below are placeholders for this assignment -- a real deployment would generate these securely and store them outside the script entirely.
 
@@ -1027,7 +1177,7 @@ SET ICNumber = EncryptByKey(
 CLOSE SYMMETRIC KEY CLE_ICNumber_SymKey;
 GO
  
-PRINT 'C2.4 � ICNumber data migrated from placeholder to real CLE encryption.';
+PRINT 'C2.4 - ICNumber data migrated from placeholder to real CLE encryption.';
 GO
 
 -- [C2.5] sp_DecryptICNumber: lets Manager/Officer decrypt a customer's IC number, with no direct key access granted to them. Confidentiality.
@@ -1166,64 +1316,176 @@ GO
 USE SmartBankDB;
 GO
 
-PRINT 'C2 � TDE and CLE setup complete. All keys and certificates backed up.';
+PRINT 'C2 - TDE and CLE setup complete. All keys and certificates backed up.';
+
+-- ================================================================
+-- PART 6B: C4 STATIC MASKING + C5 ANONYMISATION
+-- These are sanitized staging copies for safe export to development and
+-- analytics environments. They remain in dedicated schemas so the compiled
+-- script does not weaken cross-database security or grant DBA direct access to
+-- production business tables.
+-- ================================================================
+
+USE SmartBankDB;
+GO
+
+CREATE SCHEMA Sanitized AUTHORIZATION dbo;
+GO
+
+CREATE TABLE Sanitized.Customer_Sanitized (
+    CustomerID INT NOT NULL PRIMARY KEY,
+    CustomerName NVARCHAR(100) NOT NULL,
+    ICNumber VARBINARY(MAX) NULL,
+    ICNumberHash VARBINARY(32) NULL,
+    Phone NVARCHAR(20) NOT NULL,
+    Address NVARCHAR(255) NOT NULL,
+    IsActive BIT NOT NULL
+);
+GO
+
+CREATE TABLE Sanitized.Staff_Sanitized (
+    StaffID INT NOT NULL PRIMARY KEY,
+    StaffName NVARCHAR(100) NOT NULL,
+    Position NVARCHAR(50) NOT NULL,
+    Branch NVARCHAR(100) NOT NULL,
+    Phone NVARCHAR(20) NOT NULL,
+    Salary DECIMAL(15,2) NOT NULL,
+    IsActive BIT NOT NULL
+);
+GO
+
+-- C4: irreversibly replaces direct identifiers with unrelated synthetic data.
+-- EXECUTE AS OWNER lets the module read source rows without giving DBA direct
+-- SELECT permission on production tables.
+CREATE OR ALTER PROCEDURE dbo.sp_RefreshDevData
+WITH EXECUTE AS OWNER
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        TRUNCATE TABLE Sanitized.Customer_Sanitized;
+        INSERT INTO Sanitized.Customer_Sanitized
+            (CustomerID, CustomerName, ICNumber, ICNumberHash, Phone, Address, IsActive)
+        SELECT
+            CustomerID,
+            CONCAT('Test Customer ', CustomerID, ' ', LEFT(CONVERT(VARCHAR(36), NEWID()), 8)),
+            NULL,
+            NULL,
+            CONCAT('01', RIGHT('00000000' + CONVERT(VARCHAR(8), ABS(CHECKSUM(NEWID())) % 100000000), 8)),
+            CONCAT('Synthetic Address ', CustomerID, ', Kuala Lumpur'),
+            IsActive
+        FROM dbo.Customer;
+
+        TRUNCATE TABLE Sanitized.Staff_Sanitized;
+        INSERT INTO Sanitized.Staff_Sanitized
+            (StaffID, StaffName, Position, Branch, Phone, Salary, IsActive)
+        SELECT
+            StaffID,
+            CONCAT('Test Staff ', StaffID, ' ', LEFT(CONVERT(VARCHAR(36), NEWID()), 8)),
+            Position,
+            Branch,
+            CONCAT('01', RIGHT('00000000' + CONVERT(VARCHAR(8), ABS(CHECKSUM(NEWID())) % 100000000), 8)),
+            CONVERT(DECIMAL(15,2), 3000 + ABS(CHECKSUM(NEWID())) % 7000),
+            IsActive
+        FROM dbo.Staff;
+
+        COMMIT TRANSACTION;
+    END TRY
+    BEGIN CATCH
+        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
+END;
+GO
+
+GRANT EXECUTE ON dbo.sp_RefreshDevData TO DBA;
+GRANT SELECT ON SCHEMA::Sanitized TO DBA;
+DENY SELECT, INSERT, UPDATE, DELETE ON SCHEMA::Sanitized TO Bank_Manager, Bank_Officer, Customer;
+GO
+
+CREATE SCHEMA Analytics AUTHORIZATION dbo;
+GO
+
+CREATE TABLE Analytics.Account_Anonymized (
+    AccountID INT NOT NULL PRIMARY KEY,
+    SurrogateCustomerID UNIQUEIDENTIFIER NOT NULL,
+    AccountType NVARCHAR(20) NOT NULL,
+    Balance DECIMAL(15,2) NOT NULL,
+    IsActive BIT NOT NULL
+);
+GO
+
+CREATE TABLE Analytics.TransactionRecord_Anonymized (
+    TransID INT NOT NULL PRIMARY KEY,
+    AccountID INT NOT NULL,
+    TransDate DATETIME2 NOT NULL,
+    Amount DECIMAL(15,2) NOT NULL,
+    TransactionType NVARCHAR(20) NOT NULL,
+    ToAccountID INT NULL
+);
+GO
+
+-- C5: one random surrogate is generated per real customer for each refresh.
+-- No CustomerID, name, IC number, phone, or address is copied to analytics.
+CREATE OR ALTER PROCEDURE dbo.sp_RefreshAnalyticsData
+WITH EXECUTE AS OWNER
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        IF OBJECT_ID('tempdb..#SurrogateMap') IS NOT NULL DROP TABLE #SurrogateMap;
+        SELECT CustomerID AS RealCustomerID, NEWID() AS SurrogateCustomerID
+        INTO #SurrogateMap
+        FROM (SELECT DISTINCT CustomerID FROM dbo.Account) AS DistinctCustomers;
+
+        TRUNCATE TABLE Analytics.TransactionRecord_Anonymized;
+        TRUNCATE TABLE Analytics.Account_Anonymized;
+
+        INSERT INTO Analytics.Account_Anonymized
+            (AccountID, SurrogateCustomerID, AccountType, Balance, IsActive)
+        SELECT a.AccountID, m.SurrogateCustomerID, a.AccountType, a.Balance, a.IsActive
+        FROM dbo.Account a
+        JOIN #SurrogateMap m ON m.RealCustomerID = a.CustomerID;
+
+        INSERT INTO Analytics.TransactionRecord_Anonymized
+            (TransID, AccountID, TransDate, Amount, TransactionType, ToAccountID)
+        SELECT TransID, AccountID, TransDate, Amount, TransactionType, ToAccountID
+        FROM dbo.TransactionRecord;
+
+        DROP TABLE #SurrogateMap;
+        COMMIT TRANSACTION;
+    END TRY
+    BEGIN CATCH
+        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
+END;
+GO
+
+GRANT EXECUTE ON dbo.sp_RefreshAnalyticsData TO DBA;
+GRANT SELECT ON SCHEMA::Analytics TO DBA;
+DENY SELECT, INSERT, UPDATE, DELETE ON SCHEMA::Analytics TO Bank_Manager, Bank_Officer, Customer;
+GO
+
+PRINT 'C4/C5 - static masking and anonymised analytics staging controls created.';
+GO
 
 -- PART 7: DML audit triggers -- log every INSERT/UPDATE/DELETE on the business tables. Integrity.
 
 USE SmartBankDB;
 GO
 
--- Adds RecordID to AuditLog so a logged change says WHICH row changed. Integrity.
-IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('AuditSchema.AuditLog') AND name = 'RecordID')
-    ALTER TABLE AuditSchema.AuditLog ADD RecordID NVARCHAR(50) NULL;
-GO
-
--- Consolidates OldValue/NewValue into one Activity column ('old -> new'), removing empty-pair clutter. Integrity.
-IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('AuditSchema.AuditLog') AND name = 'Activity')
-    ALTER TABLE AuditSchema.AuditLog ADD Activity NVARCHAR(MAX) NULL;
-GO
-
-IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('AuditSchema.AuditLog') AND name = 'OldValue')
-    ALTER TABLE AuditSchema.AuditLog DROP COLUMN OldValue;
-GO
-
-IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('AuditSchema.AuditLog') AND name = 'NewValue')
-    ALTER TABLE AuditSchema.AuditLog DROP COLUMN NewValue;
-GO
-
--- Widens ChangedBy to hold 'username (Role)', since usernames alone don't reveal role. Integrity.
-ALTER TABLE AuditSchema.AuditLog ALTER COLUMN ChangedBy NVARCHAR(150) NOT NULL;
-GO
-
--- fn_GetSessionUsername: resolves SESSION_CONTEXT to 'username (Role)' for audit ChangedBy. Integrity.
-CREATE OR ALTER FUNCTION dbo.fn_GetSessionUsername()
-RETURNS NVARCHAR(150)
-AS
-BEGIN
-    DECLARE @Username    NVARCHAR(50);
-    DECLARE @Role        NVARCHAR(50);
-    DECLARE @StaffID     INT = TRY_CAST(SESSION_CONTEXT(N'StaffID')    AS INT);
-    DECLARE @CustomerID  INT = TRY_CAST(SESSION_CONTEXT(N'CustomerID') AS INT);
-
-    IF @StaffID IS NOT NULL
-        SELECT @Username = ul.Username, @Role = s.Position
-        FROM dbo.UserLogin ul
-        JOIN dbo.Staff s ON s.StaffID = ul.StaffID
-        WHERE ul.StaffID = @StaffID;
-    ELSE IF @CustomerID IS NOT NULL
-        SELECT @Username = Username, @Role = 'Customer'
-        FROM dbo.UserLogin
-        WHERE CustomerID = @CustomerID;
-
-    -- No application-level session (e.g. this script's own seed/test
-    -- statements running directly as the sysadmin session) -- fall
-    -- back to the raw SQL login, with no role to show
-    IF @Username IS NULL
-        RETURN SUSER_NAME();
-
-    RETURN CONCAT(@Username, ' (', @Role, ')');
-END;
-GO
+-- AuditLog already has its final RecordID/Activity schema, and
+-- fn_GetSessionUsername is created before authentication procedures in Part 1.
+-- This avoids the former clean-deployment dependency failure.
 
 
 -- trg_Staff_Audit: logs all Staff changes. Integrity.
@@ -1645,7 +1907,7 @@ BEGIN
         INSERT INTO dbo.UserLogin (Username, PasswordHash, Salt, StaffID, UserType, PasswordLastChanged, IsActive)
         VALUES (
             @NewUsername,
-            HASHBYTES('SHA2_512', @NewLoginSalt + CONVERT(VARBINARY(4000), @TempPassword)),
+            dbo.fn_HashPassword(@TempPassword, @NewLoginSalt),
             @NewLoginSalt,
             @NewStaffID,
             'Staff',
@@ -1781,7 +2043,7 @@ BEGIN
         INSERT INTO dbo.UserLogin (Username, PasswordHash, Salt, CustomerID, UserType, PasswordLastChanged, IsActive)
         VALUES (
             @NewCustUsername,
-            HASHBYTES('SHA2_512', @CustNewSalt + CONVERT(VARBINARY(4000), @CustTempPassword)),
+            dbo.fn_HashPassword(@CustTempPassword, @CustNewSalt),
             @CustNewSalt,
             @NewCustID,
             'Customer',
