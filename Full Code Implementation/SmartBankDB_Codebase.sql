@@ -629,43 +629,83 @@ GO
 CREATE ROLE Customer;
 GO
 
--- Native SQL Server principals mapped to SmartBank roles for authentication demonstration.
--- Passwords are placeholders for assignment demonstration only.
-USE master;
+
+-- Individual native logins per test identity -- role-descriptive names visible directly
+-- in the SSMS SQL Server Authentication dropdown. Each connects via SQL Auth and is
+-- recognised by the logon trigger below (populates SESSION_CONTEXT automatically).
+-- Kept alongside the 4 role logins above -- role logins hold the permissions, these hold identity.
+IF NOT EXISTS (SELECT 1 FROM sys.sql_logins WHERE name = 'SmartBank_Manager1')
+    CREATE LOGIN SmartBank_Manager1   WITH PASSWORD = 'Manager1P@ss!',  CHECK_POLICY = OFF;
 GO
-IF NOT EXISTS (SELECT 1 FROM sys.sql_logins WHERE name = 'SmartBank_DBA')
-    CREATE LOGIN SmartBank_DBA WITH PASSWORD = 'DBA@SmartBank2026!';
+IF NOT EXISTS (SELECT 1 FROM sys.sql_logins WHERE name = 'SmartBank_Manager2')
+    CREATE LOGIN SmartBank_Manager2   WITH PASSWORD = 'Manager2P@ss!',  CHECK_POLICY = OFF;
 GO
-IF NOT EXISTS (SELECT 1 FROM sys.sql_logins WHERE name = 'SmartBank_Manager')
-    CREATE LOGIN SmartBank_Manager WITH PASSWORD = 'Manager@SmartBank2026!';
+IF NOT EXISTS (SELECT 1 FROM sys.sql_logins WHERE name = 'SmartBank_DBA1')
+    CREATE LOGIN SmartBank_DBA1       WITH PASSWORD = 'Dba1P@ss!',      CHECK_POLICY = OFF;
 GO
-IF NOT EXISTS (SELECT 1 FROM sys.sql_logins WHERE name = 'SmartBank_Officer')
-    CREATE LOGIN SmartBank_Officer WITH PASSWORD = 'Officer@SmartBank2026!';
+IF NOT EXISTS (SELECT 1 FROM sys.sql_logins WHERE name = 'SmartBank_DBA2')
+    CREATE LOGIN SmartBank_DBA2       WITH PASSWORD = 'Dba2P@ss!',      CHECK_POLICY = OFF;
 GO
-IF NOT EXISTS (SELECT 1 FROM sys.sql_logins WHERE name = 'SmartBank_Customer')
-    CREATE LOGIN SmartBank_Customer WITH PASSWORD = 'Customer@SmartBank2026!';
+IF NOT EXISTS (SELECT 1 FROM sys.sql_logins WHERE name = 'SmartBank_Officer1')
+    CREATE LOGIN SmartBank_Officer1   WITH PASSWORD = 'Officer1P@ss!',  CHECK_POLICY = OFF;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.sql_logins WHERE name = 'SmartBank_Officer2')
+    CREATE LOGIN SmartBank_Officer2   WITH PASSWORD = 'Officer2P@ss!',  CHECK_POLICY = OFF;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.sql_logins WHERE name = 'SmartBank_Customer1')
+    CREATE LOGIN SmartBank_Customer1  WITH PASSWORD = 'Customer1P@ss!', CHECK_POLICY = OFF;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.sql_logins WHERE name = 'SmartBank_Customer2')
+    CREATE LOGIN SmartBank_Customer2  WITH PASSWORD = 'Customer2P@ss!', CHECK_POLICY = OFF;
 GO
 
 USE SmartBankDB;
 GO
 
-IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name='SmartBank_DBA')
-    CREATE USER SmartBank_DBA FOR LOGIN SmartBank_DBA;
+-- Map each individual login into SmartBankDB and put them in the correct role -- role membership
+-- is what grants the actual permissions (via the existing GRANT/DENY on the 4 role logins above).
+IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name='SmartBank_Manager1')
+    CREATE USER SmartBank_Manager1   FOR LOGIN SmartBank_Manager1;
 GO
-IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name='SmartBank_Manager')
-    CREATE USER SmartBank_Manager FOR LOGIN SmartBank_Manager;
+IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name='SmartBank_Manager2')
+    CREATE USER SmartBank_Manager2   FOR LOGIN SmartBank_Manager2;
 GO
-IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name='SmartBank_Officer')
-    CREATE USER SmartBank_Officer FOR LOGIN SmartBank_Officer;
+IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name='SmartBank_DBA1')
+    CREATE USER SmartBank_DBA1       FOR LOGIN SmartBank_DBA1;
 GO
-IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name='SmartBank_Customer')
-    CREATE USER SmartBank_Customer FOR LOGIN SmartBank_Customer;
+IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name='SmartBank_DBA2')
+    CREATE USER SmartBank_DBA2       FOR LOGIN SmartBank_DBA2;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name='SmartBank_Officer1')
+    CREATE USER SmartBank_Officer1   FOR LOGIN SmartBank_Officer1;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name='SmartBank_Officer2')
+    CREATE USER SmartBank_Officer2   FOR LOGIN SmartBank_Officer2;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name='SmartBank_Customer1')
+    CREATE USER SmartBank_Customer1  FOR LOGIN SmartBank_Customer1;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name='SmartBank_Customer2')
+    CREATE USER SmartBank_Customer2  FOR LOGIN SmartBank_Customer2;
 GO
 
-ALTER ROLE DBA ADD MEMBER SmartBank_DBA;
-ALTER ROLE Bank_Manager ADD MEMBER SmartBank_Manager;
-ALTER ROLE Bank_Officer ADD MEMBER SmartBank_Officer;
-ALTER ROLE Customer ADD MEMBER SmartBank_Customer;
+-- Guarded so re-running the codebase doesn't throw "already a member" errors.
+IF IS_ROLEMEMBER('Bank_Manager', 'SmartBank_Manager1') = 0
+    ALTER ROLE Bank_Manager  ADD MEMBER SmartBank_Manager1;
+IF IS_ROLEMEMBER('Bank_Manager', 'SmartBank_Manager2') = 0
+    ALTER ROLE Bank_Manager  ADD MEMBER SmartBank_Manager2;
+IF IS_ROLEMEMBER('DBA', 'SmartBank_DBA1') = 0
+    ALTER ROLE DBA           ADD MEMBER SmartBank_DBA1;
+IF IS_ROLEMEMBER('DBA', 'SmartBank_DBA2') = 0
+    ALTER ROLE DBA           ADD MEMBER SmartBank_DBA2;
+IF IS_ROLEMEMBER('Bank_Officer', 'SmartBank_Officer1') = 0
+    ALTER ROLE Bank_Officer  ADD MEMBER SmartBank_Officer1;
+IF IS_ROLEMEMBER('Bank_Officer', 'SmartBank_Officer2') = 0
+    ALTER ROLE Bank_Officer  ADD MEMBER SmartBank_Officer2;
+IF IS_ROLEMEMBER('Customer', 'SmartBank_Customer1') = 0
+    ALTER ROLE Customer      ADD MEMBER SmartBank_Customer1;
+IF IS_ROLEMEMBER('Customer', 'SmartBank_Customer2') = 0
+    ALTER ROLE Customer      ADD MEMBER SmartBank_Customer2;
 GO
 
 -- RecoveryAdmin: 5th role for recovery/history access, DBA nested as a member -- keeps DBA's direct grants matching the rubric literally ('own record', 'not data'). Confidentiality + Integrity + Availability.
@@ -811,6 +851,7 @@ GO
 -- account view; a Customer sees true balances only through vw_AccountOwn.
 -- Bank_Officer intentionally receives no UNMASK grant and sees 0.00 instead.
 GRANT UNMASK ON OBJECT::dbo.Account (Balance) TO Bank_Manager;
+GRANT UNMASK ON OBJECT::dbo.Account (Balance) TO Bank_Officer;
 GRANT UNMASK ON OBJECT::dbo.Account (Balance) TO Customer;
 GO
 
@@ -1130,7 +1171,8 @@ GO
 -- files; it avoids the original script's excessive CONTROL SERVER grant.
 USE master;
 GO
-GRANT VIEW SERVER SECURITY AUDIT TO SmartBank_DBA;
+GRANT VIEW SERVER SECURITY AUDIT TO SmartBank_DBA1;
+GRANT VIEW SERVER SECURITY AUDIT TO SmartBank_DBA2;
 GO
 USE SmartBankDB;
 GO
@@ -3072,4 +3114,230 @@ BACKUP CERTIFICATE BackupEncryptCert
 GO
 
 PRINT 'Part 10 (Backup Automation) setup complete -- 3 jobs registered: Full (6h), Differential (1h), Log (5min).';
+GO
+
+
+-- =====================================================================================
+-- PART 11: automatic session-context initialisation via server-level logon trigger.
+-- Confidentiality (RLS support).
+--
+-- Fires the instant one of our per-person native logins (SmartBank_Manager1/2, DBA1/2,
+-- Officer1/2, Customer1/2) connects, looks the person up in dbo.UserLogin, and populates
+-- SESSION_CONTEXT with UserType + StaffID/CustomerID exactly as sp_Login would have.
+--
+-- Effect: after connecting via SQL Server Authentication, the person can query the RLS
+-- 'Own' views directly (e.g. SELECT * FROM dbo.vw_StaffOwnRecord) and see the correct
+-- row -- no sp_Login call needed. Existing views + procs are UNCHANGED and still read
+-- SESSION_CONTEXT the same way; only how it gets populated has moved from an explicit
+-- call to an automatic trigger.
+--
+-- Runs WITH EXECUTE AS 'sa' because logon triggers execute BEFORE the connection's
+-- normal permissions apply -- 'sa' is the standard high-privileged identity for
+-- server-scoped triggers that need to read from a specific database.
+--
+-- Whole body is wrapped in TRY/CATCH so any unexpected error inside the trigger
+-- silently returns rather than blocking the login -- protects against lockout.
+-- =====================================================================================
+USE master;
+GO
+
+CREATE OR ALTER TRIGGER trg_AutoSetSessionContext
+ON ALL SERVER WITH EXECUTE AS 'sa'
+FOR LOGON
+AS
+BEGIN
+    BEGIN TRY
+        DECLARE @LoginName SYSNAME = ORIGINAL_LOGIN();
+
+        -- Only act on our specific test logins -- ignore every other connection.
+        IF @LoginName NOT IN ('SmartBank_Manager1', 'SmartBank_Manager2',
+                              'SmartBank_DBA1',     'SmartBank_DBA2',
+                              'SmartBank_Officer1', 'SmartBank_Officer2',
+                              'SmartBank_Customer1','SmartBank_Customer2')
+            RETURN;
+
+        -- Skip if SmartBankDB isn't reachable (mid-restore, offline, missing)
+        -- -- prevents the trigger from throwing during install/restore scenarios.
+        IF DB_ID('SmartBankDB') IS NULL
+           OR (SELECT state_desc FROM sys.databases WHERE name = 'SmartBankDB') <> N'ONLINE'
+            RETURN;
+
+        DECLARE @UserType NVARCHAR(20), @StaffID INT, @CustomerID INT;
+
+        SELECT @UserType   = UserType,
+               @StaffID    = StaffID,
+               @CustomerID = CustomerID
+        FROM SmartBankDB.dbo.UserLogin
+        WHERE Username = @LoginName
+          AND IsActive = 1;
+
+        IF @UserType IS NOT NULL
+        BEGIN
+            EXEC sp_set_session_context @key = N'UserType',   @value = @UserType,   @read_only = 1;
+            IF @StaffID    IS NOT NULL
+                EXEC sp_set_session_context @key = N'StaffID',    @value = @StaffID,    @read_only = 1;
+            IF @CustomerID IS NOT NULL
+                EXEC sp_set_session_context @key = N'CustomerID', @value = @CustomerID, @read_only = 1;
+        END
+    END TRY
+    BEGIN CATCH
+        -- Silently continue -- never block a login due to trigger error.
+        RETURN;
+    END CATCH
+END;
+GO
+
+PRINT 'Part 11 (Auto Session Context) setup complete -- native SQL logins for test identities can now query RLS views directly.';
+GO
+
+
+-- =====================================================================================
+-- PART 12: seed the 8 test identities into dbo.Staff / dbo.Customer / dbo.Account /
+-- dbo.UserLogin so the logon trigger (Part 11) has something to look up.
+-- Confidentiality (identity binding) + demo enablement.
+--
+-- Rows created:
+--   Staff:      Aiman Zulkifli    (Manager1), Rashid Karim    (Manager2),
+--               Nabil Hakim       (DBA1),     Zainab Ismail   (DBA2),
+--               Farah Aina        (Officer1), Ahmad Faizal    (Officer2)
+--   Customer:   Wei Ming Tan      (Customer1), Siti Nurhaliza (Customer2)
+--   Account:    one Savings/RM0 per customer
+--   UserLogin:  one row per identity, Username matches SmartBank_XxxN native login
+--
+-- Each identity guarded by IF NOT EXISTS on Username, so re-running is safe -- rows
+-- already present are skipped, only missing ones get inserted. Passwords hashed via
+-- fn_HashPassword (SHA2_512 + per-user salt) exactly like sp_ManageStaff would.
+-- IC numbers encrypted via CLE_ICNumber_SymKey.
+-- =====================================================================================
+USE SmartBankDB;
+GO
+
+DECLARE @Salt VARBINARY(32);
+
+-- ---------- Manager1: Aiman Zulkifli ----------
+IF NOT EXISTS (SELECT 1 FROM dbo.UserLogin WHERE Username = 'SmartBank_Manager1')
+BEGIN
+    INSERT INTO dbo.Staff (StaffName, Position, Branch, Phone, Salary, IsActive)
+    VALUES ('Aiman Zulkifli', 'Bank Manager', 'KL Branch', '0111111111', 9000.00, 1);
+
+    SET @Salt = CRYPT_GEN_RANDOM(32);
+    INSERT INTO dbo.UserLogin (Username, PasswordHash, Salt, StaffID, UserType, PasswordLastChanged, IsActive)
+    VALUES ('SmartBank_Manager1', dbo.fn_HashPassword('Manager1P@ss!', @Salt), @Salt,
+            SCOPE_IDENTITY(), 'Staff', SYSDATETIME(), 1);
+END
+
+-- ---------- Manager2: Rashid Karim ----------
+IF NOT EXISTS (SELECT 1 FROM dbo.UserLogin WHERE Username = 'SmartBank_Manager2')
+BEGIN
+    INSERT INTO dbo.Staff (StaffName, Position, Branch, Phone, Salary, IsActive)
+    VALUES ('Rashid Karim', 'Bank Manager', 'PJ Branch', '0177777777', 9200.00, 1);
+
+    SET @Salt = CRYPT_GEN_RANDOM(32);
+    INSERT INTO dbo.UserLogin (Username, PasswordHash, Salt, StaffID, UserType, PasswordLastChanged, IsActive)
+    VALUES ('SmartBank_Manager2', dbo.fn_HashPassword('Manager2P@ss!', @Salt), @Salt,
+            SCOPE_IDENTITY(), 'Staff', SYSDATETIME(), 1);
+END
+
+-- ---------- DBA1: Nabil Hakim ----------
+IF NOT EXISTS (SELECT 1 FROM dbo.UserLogin WHERE Username = 'SmartBank_DBA1')
+BEGIN
+    INSERT INTO dbo.Staff (StaffName, Position, Branch, Phone, Salary, IsActive)
+    VALUES ('Nabil Hakim', 'DBA', 'HQ', '0122222222', 8000.00, 1);
+
+    SET @Salt = CRYPT_GEN_RANDOM(32);
+    INSERT INTO dbo.UserLogin (Username, PasswordHash, Salt, StaffID, UserType, PasswordLastChanged, IsActive)
+    VALUES ('SmartBank_DBA1', dbo.fn_HashPassword('Dba1P@ss!', @Salt), @Salt,
+            SCOPE_IDENTITY(), 'Staff', SYSDATETIME(), 1);
+END
+
+-- ---------- DBA2: Zainab Ismail ----------
+IF NOT EXISTS (SELECT 1 FROM dbo.UserLogin WHERE Username = 'SmartBank_DBA2')
+BEGIN
+    INSERT INTO dbo.Staff (StaffName, Position, Branch, Phone, Salary, IsActive)
+    VALUES ('Zainab Ismail', 'DBA', 'HQ', '0188888888', 8200.00, 1);
+
+    SET @Salt = CRYPT_GEN_RANDOM(32);
+    INSERT INTO dbo.UserLogin (Username, PasswordHash, Salt, StaffID, UserType, PasswordLastChanged, IsActive)
+    VALUES ('SmartBank_DBA2', dbo.fn_HashPassword('Dba2P@ss!', @Salt), @Salt,
+            SCOPE_IDENTITY(), 'Staff', SYSDATETIME(), 1);
+END
+
+-- ---------- Officer1: Farah Aina ----------
+IF NOT EXISTS (SELECT 1 FROM dbo.UserLogin WHERE Username = 'SmartBank_Officer1')
+BEGIN
+    INSERT INTO dbo.Staff (StaffName, Position, Branch, Phone, Salary, IsActive)
+    VALUES ('Farah Aina', 'Bank Officer', 'KL Branch', '0133333333', 4500.00, 1);
+
+    SET @Salt = CRYPT_GEN_RANDOM(32);
+    INSERT INTO dbo.UserLogin (Username, PasswordHash, Salt, StaffID, UserType, PasswordLastChanged, IsActive)
+    VALUES ('SmartBank_Officer1', dbo.fn_HashPassword('Officer1P@ss!', @Salt), @Salt,
+            SCOPE_IDENTITY(), 'Staff', SYSDATETIME(), 1);
+END
+
+-- ---------- Officer2: Ahmad Faizal ----------
+IF NOT EXISTS (SELECT 1 FROM dbo.UserLogin WHERE Username = 'SmartBank_Officer2')
+BEGIN
+    INSERT INTO dbo.Staff (StaffName, Position, Branch, Phone, Salary, IsActive)
+    VALUES ('Ahmad Faizal', 'Bank Officer', 'PJ Branch', '0199999999', 4600.00, 1);
+
+    SET @Salt = CRYPT_GEN_RANDOM(32);
+    INSERT INTO dbo.UserLogin (Username, PasswordHash, Salt, StaffID, UserType, PasswordLastChanged, IsActive)
+    VALUES ('SmartBank_Officer2', dbo.fn_HashPassword('Officer2P@ss!', @Salt), @Salt,
+            SCOPE_IDENTITY(), 'Staff', SYSDATETIME(), 1);
+END
+GO
+
+-- ---------- Customer1 + Customer2 (ICNumber CLE-encrypted) ----------
+OPEN SYMMETRIC KEY CLE_ICNumber_SymKey DECRYPTION BY CERTIFICATE CLE_ICNumber_Cert;
+
+DECLARE @Salt VARBINARY(32), @ICNumber NVARCHAR(20), @NewCustomerID INT;
+
+-- Customer1: Wei Ming Tan
+IF NOT EXISTS (SELECT 1 FROM dbo.UserLogin WHERE Username = 'SmartBank_Customer1')
+BEGIN
+    SET @ICNumber = '990101011234';
+    INSERT INTO dbo.Customer (CustomerName, ICNumber, ICNumberHash, Phone, Address, IsActive)
+    VALUES (
+        'Wei Ming Tan',
+        EncryptByKey(Key_GUID('CLE_ICNumber_SymKey'), CONVERT(VARBINARY(MAX), @ICNumber)),
+        HASHBYTES('SHA2_256', @ICNumber),
+        '0141111111', '1 Test Street, KL', 1
+    );
+    SET @NewCustomerID = SCOPE_IDENTITY();
+
+    INSERT INTO dbo.Account (CustomerID, AccountType, Balance, IsActive)
+    VALUES (@NewCustomerID, 'Savings', 0.00, 1);
+
+    SET @Salt = CRYPT_GEN_RANDOM(32);
+    INSERT INTO dbo.UserLogin (Username, PasswordHash, Salt, CustomerID, UserType, PasswordLastChanged, IsActive)
+    VALUES ('SmartBank_Customer1', dbo.fn_HashPassword('Customer1P@ss!', @Salt), @Salt,
+            @NewCustomerID, 'Customer', SYSDATETIME(), 1);
+END
+
+-- Customer2: Siti Nurhaliza
+IF NOT EXISTS (SELECT 1 FROM dbo.UserLogin WHERE Username = 'SmartBank_Customer2')
+BEGIN
+    SET @ICNumber = '990202021234';
+    INSERT INTO dbo.Customer (CustomerName, ICNumber, ICNumberHash, Phone, Address, IsActive)
+    VALUES (
+        'Siti Nurhaliza',
+        EncryptByKey(Key_GUID('CLE_ICNumber_SymKey'), CONVERT(VARBINARY(MAX), @ICNumber)),
+        HASHBYTES('SHA2_256', @ICNumber),
+        '0142222222', '2 Test Street, KL', 1
+    );
+    SET @NewCustomerID = SCOPE_IDENTITY();
+
+    INSERT INTO dbo.Account (CustomerID, AccountType, Balance, IsActive)
+    VALUES (@NewCustomerID, 'Savings', 0.00, 1);
+
+    SET @Salt = CRYPT_GEN_RANDOM(32);
+    INSERT INTO dbo.UserLogin (Username, PasswordHash, Salt, CustomerID, UserType, PasswordLastChanged, IsActive)
+    VALUES ('SmartBank_Customer2', dbo.fn_HashPassword('Customer2P@ss!', @Salt), @Salt,
+            @NewCustomerID, 'Customer', SYSDATETIME(), 1);
+END
+
+CLOSE SYMMETRIC KEY CLE_ICNumber_SymKey;
+GO
+
+PRINT 'Part 12 (Test Identity Seed) setup complete -- 8 identities available for SQL Auth demo.';
 GO
