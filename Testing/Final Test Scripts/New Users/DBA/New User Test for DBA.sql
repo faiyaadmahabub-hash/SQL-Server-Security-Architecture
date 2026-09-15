@@ -1,0 +1,1 @@
+SELECT * FROM dbo.vw_CustomerAll;
