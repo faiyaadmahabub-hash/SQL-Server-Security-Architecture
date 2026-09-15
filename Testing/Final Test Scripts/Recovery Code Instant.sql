@@ -27,7 +27,7 @@ DECLARE @Success BIT,
 
 EXEC dbo.sp_RecoverStaff
     @StaffID = 5,
-    @AsOfDateTime = '2026-09-07 08:21:42.7029878',
+    @AsOfDateTime = '2026-09-14 14:09:52.5365978',
     @Success = @Success OUTPUT,
     @Message = @Message OUTPUT;
 
@@ -63,4 +63,14 @@ EXEC dbo.sp_RecoverAccount
 SELECT
     @Success AS Success,
     @Message AS Message;
+GO
+
+
+
+
+SELECT*
+    
+FROM dbo.TransactionRecord
+FOR SYSTEM_TIME ALL
+ORDER BY SysStartTime DESC;
 GO
