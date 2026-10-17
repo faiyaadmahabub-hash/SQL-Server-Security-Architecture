@@ -1,0 +1,5 @@
+
+# Local SQL/Visual Studio workspace state
+.vs/
+*.suo
+*.user

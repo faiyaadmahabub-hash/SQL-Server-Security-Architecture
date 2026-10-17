@@ -1,0 +1,10 @@
+Source contains: database baseline
+Source contains: temporal history
+Source contains: roles
+Source contains: session identity
+Source contains: native audit
+Source contains: encrypted backups
+Source contains: procedure layer
+SQL source files: 71
+PASS: static feature/source inventory. These text checks do not parse T-SQL or execute its security controls.
+NOT RUN: deployment, per-role permission tests, backup/restore, audit output or concurrency tests.
